@@ -25,7 +25,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - name: Install dependencies
+        run: npm ci
+        env:
+          # The deploy job never runs the browser tests, so skip the ~300 MB
+          # browser download that playwright's postinstall would otherwise do.
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
       - run: npm run typecheck
       - name: Build
         run: npm run build
