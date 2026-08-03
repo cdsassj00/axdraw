@@ -1,0 +1,19 @@
+Bundled webfonts
+================
+
+Caveat — Copyright (c) Impallari Type
+Gaegu  — Copyright (c) Yoon Design
+
+Both families are licensed under the SIL Open Font License, Version 1.1, and are
+redistributed here unmodified (as woff2 subsets produced by the Google Fonts
+API). The full licence text is available at https://openfontlicense.org and in
+each family's entry on https://fonts.google.com.
+
+SIL OPEN FONT LICENSE Version 1.1 — summary of the terms that apply here:
+
+  * The fonts may be used, studied, modified and redistributed freely, provided
+    they are not sold by themselves.
+  * The fonts, including any derivative works, can be bundled, embedded,
+    redistributed and/or sold with any software provided that any reserved names
+    are not used by derivative works.
+  * This licence does not apply to any of the other files in this repository.

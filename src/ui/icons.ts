@@ -1,0 +1,61 @@
+/** Inline SVG icons (24×24, stroke based). */
+
+const wrap = (body: string, fill = false): string =>
+  `<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="${fill ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+
+export const icons: Record<string, string> = {
+  selection: wrap('<path d="M6 3.5 18 12l-5.1 1.4L15 19l-2.2 1-2.2-5.4L6 18.6z"/>'),
+  rectangle: wrap('<rect x="4" y="6" width="16" height="12" rx="2"/>'),
+  diamond: wrap('<path d="M12 3.5 20.5 12 12 20.5 3.5 12z"/>'),
+  ellipse: wrap('<ellipse cx="12" cy="12" rx="8.5" ry="6.5"/>'),
+  arrow: wrap('<path d="M4 18 20 6"/><path d="M13.5 6H20v6.5"/>'),
+  line: wrap('<path d="M4 18 20 6"/>'),
+  freedraw: wrap('<path d="M4.5 19.5 8 18.8 19 7.8a2 2 0 0 0-2.8-2.8l-11 11z"/><path d="M15.5 6.5l2 2"/>'),
+  text: wrap('<path d="M5 6V4.5h14V6"/><path d="M12 4.5v15"/><path d="M9 19.5h6"/>'),
+  image: wrap('<rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M4 17l4.5-4.5 3.5 3.5 3-2.5L20 17"/>'),
+  eraser: wrap('<path d="M8.5 19.5 3.8 14.8a2 2 0 0 1 0-2.8l8-8a2 2 0 0 1 2.9 0l4.6 4.6a2 2 0 0 1 0 2.9l-8 8z"/><path d="M20.5 19.5H9"/>'),
+  frame: wrap('<path d="M6 3v18M18 3v18M3 6h18M3 18h18"/>'),
+  laser: wrap('<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/>'),
+  hand: wrap('<path d="M8 12.5V6a1.5 1.5 0 0 1 3 0v5.5"/><path d="M11 11V4.8a1.5 1.5 0 0 1 3 0V11"/><path d="M14 11.2V6.5a1.5 1.5 0 0 1 3 0V14c0 3.6-2.2 6.5-5.5 6.5S6 17.6 6 14v-1.7a1.4 1.4 0 0 1 2.8-.3"/>'),
+  lock: wrap('<rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/>'),
+  unlock: wrap('<rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V7.8a4 4 0 0 1 7.5-1.9"/>'),
+  undo: wrap('<path d="M4 9h11a5 5 0 0 1 0 10H8"/><path d="M8 5 4 9l4 4"/>'),
+  redo: wrap('<path d="M20 9H9a5 5 0 0 0 0 10h7"/><path d="M16 5l4 4-4 4"/>'),
+  trash: wrap('<path d="M4.5 6.5h15"/><path d="M9 6.5V4.8A1.3 1.3 0 0 1 10.3 3.5h3.4A1.3 1.3 0 0 1 15 4.8v1.7"/><path d="M6.5 6.5 7.5 20a1.5 1.5 0 0 0 1.5 1.4h6a1.5 1.5 0 0 0 1.5-1.4l1-13.5"/>'),
+  duplicate: wrap('<rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2"/><path d="M15.5 5.5A2 2 0 0 0 13.5 3.5h-8a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2"/>'),
+  menu: wrap('<path d="M4 7h16M4 12h16M4 17h16"/>'),
+  plus: wrap('<path d="M12 5v14M5 12h14"/>'),
+  minus: wrap('<path d="M5 12h14"/>'),
+  help: wrap('<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.4v.6"/><circle cx="12" cy="17" r="0.9" fill="currentColor"/>'),
+  moon: wrap('<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/>'),
+  sun: wrap('<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.2 5.2l1.4 1.4M17.4 17.4l1.4 1.4M18.8 5.2l-1.4 1.4M6.6 17.4l-1.4 1.4"/>'),
+  download: wrap('<path d="M12 3.5v11"/><path d="M8 11l4 4 4-4"/><path d="M4.5 17v2A1.5 1.5 0 0 0 6 20.5h12a1.5 1.5 0 0 0 1.5-1.5v-2"/>'),
+  upload: wrap('<path d="M12 15.5v-11"/><path d="M8 8l4-4 4 4"/><path d="M4.5 17v2A1.5 1.5 0 0 0 6 20.5h12a1.5 1.5 0 0 0 1.5-1.5v-2"/>'),
+  copy: wrap('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 6.5A2 2 0 0 0 13 4.5H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2"/>'),
+  group: wrap('<rect x="3.5" y="3.5" width="8" height="8" rx="1"/><rect x="12.5" y="12.5" width="8" height="8" rx="1"/><path d="M11.5 7.5h4a2 2 0 0 1 2 2v3" stroke-dasharray="2 2"/>'),
+  ungroup: wrap('<rect x="3.5" y="3.5" width="7" height="7" rx="1"/><rect x="13.5" y="13.5" width="7" height="7" rx="1"/>'),
+  sendToBack: wrap('<rect x="7" y="7" width="10" height="10" rx="1"/><path d="M4 10V5a1 1 0 0 1 1-1h5M20 14v5a1 1 0 0 1-1 1h-5" stroke-dasharray="2 2"/>'),
+  bringToFront: wrap('<rect x="4" y="4" width="10" height="10" rx="1" stroke-dasharray="2 2"/><rect x="10" y="10" width="10" height="10" rx="1"/>'),
+  sendBackward: wrap('<rect x="8" y="8" width="12" height="12" rx="1"/><path d="M4 4h8v8H4z" stroke-dasharray="2 2"/>'),
+  bringForward: wrap('<rect x="4" y="4" width="12" height="12" rx="1"/><path d="M12 12h8v8h-8z" stroke-dasharray="2 2"/>'),
+  alignLeft: wrap('<path d="M4 3.5v17"/><rect x="7" y="6" width="12" height="4" rx="1"/><rect x="7" y="14" width="8" height="4" rx="1"/>'),
+  alignCenterH: wrap('<path d="M12 3.5v17"/><rect x="5" y="6" width="14" height="4" rx="1"/><rect x="8" y="14" width="8" height="4" rx="1"/>'),
+  alignRight: wrap('<path d="M20 3.5v17"/><rect x="5" y="6" width="12" height="4" rx="1"/><rect x="9" y="14" width="8" height="4" rx="1"/>'),
+  alignTop: wrap('<path d="M3.5 4h17"/><rect x="6" y="7" width="4" height="12" rx="1"/><rect x="14" y="7" width="4" height="8" rx="1"/>'),
+  alignCenterV: wrap('<path d="M3.5 12h17"/><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="8" width="4" height="8" rx="1"/>'),
+  alignBottom: wrap('<path d="M3.5 20h17"/><rect x="6" y="5" width="4" height="12" rx="1"/><rect x="14" y="9" width="4" height="8" rx="1"/>'),
+  distributeH: wrap('<path d="M3.5 4v16M20.5 4v16"/><rect x="9" y="7" width="6" height="10" rx="1"/>'),
+  distributeV: wrap('<path d="M4 3.5h16M4 20.5h16"/><rect x="7" y="9" width="10" height="6" rx="1"/>'),
+  flipH: wrap('<path d="M12 3.5v17"/><path d="M9 7 4 12l5 5z"/><path d="M15 7l5 5-5 5z"/>'),
+  flipV: wrap('<path d="M3.5 12h17"/><path d="M7 9 12 4l5 5z"/><path d="M7 15l5 5 5-5z"/>'),
+  zoomReset: wrap('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>'),
+  close: wrap('<path d="M6 6l12 12M18 6 6 18"/>'),
+  wand: wrap('<path d="M4 20 15 9"/><path d="M17 3.5v3M20.5 5.5l-2 2M21 10h-3"/><path d="m13.5 6.5 4 4"/>'),
+  grid: wrap('<path d="M3.5 9h17M3.5 15h17M9 3.5v17M15 3.5v17"/>'),
+  check: wrap('<path d="m5 12.5 4.5 4.5L19 7"/>'),
+  chevronDown: wrap('<path d="m6 9 6 6 6-6"/>'),
+};
+
+export function iconEl(name: keyof typeof icons | string): string {
+  return icons[name] ?? "";
+}

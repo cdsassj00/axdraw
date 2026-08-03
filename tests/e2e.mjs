@@ -1,0 +1,385 @@
+/**
+ * End-to-end smoke tests.
+ *
+ * Builds nothing on its own — run `npm run build` first (or use `npm run
+ * test:e2e`, which does it for you). The script starts `vite preview`, drives
+ * the editor with real pointer/keyboard input, and asserts on the resulting
+ * scene. Set PLAYWRIGHT_CHROMIUM to point at a specific Chromium binary.
+ */
+
+import { spawn } from "node:child_process";
+import { chromium } from "playwright";
+
+const PORT = Number(process.env.PORT ?? 4173);
+const BASE = `http://localhost:${PORT}`;
+const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR ?? null;
+
+let passed = 0;
+let failed = 0;
+
+function check(name, ok, extra = "") {
+  if (ok) passed++;
+  else failed++;
+  console.log(`${ok ? "  ok  " : "FAIL  "}${name}${extra ? ` :: ${extra}` : ""}`);
+}
+
+async function waitForServer(url, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) return;
+    } catch {
+      // Not listening yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Preview server did not start on ${url}`);
+}
+
+const server = spawn("npx", ["vite", "preview", "--port", String(PORT)], {
+  stdio: "ignore",
+  detached: true,
+});
+
+let browser;
+try {
+  await waitForServer(BASE);
+
+  browser = await chromium.launch({
+    ...(process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {}),
+    args: ["--no-sandbox"],
+  });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+
+  await page.goto(BASE, { waitUntil: "networkidle" });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: "networkidle" });
+
+  /** Canvas coordinates below y=110 / left of x=240 are covered by the UI. */
+  const drag = async (from, to, steps = 12) => {
+    await page.mouse.move(from[0], from[1]);
+    await page.mouse.down();
+    for (let i = 1; i <= steps; i++) {
+      await page.mouse.move(
+        from[0] + ((to[0] - from[0]) * i) / steps,
+        from[1] + ((to[1] - from[1]) * i) / steps,
+      );
+    }
+    await page.mouse.up();
+  };
+
+  const scene = () =>
+    page.evaluate(() => {
+      const app = window.axdraw;
+      const elements = app.elements.filter((element) => !element.isDeleted);
+      return {
+        n: elements.length,
+        types: elements.map((element) => element.type),
+        selected: app.state.selectedIds.size,
+        last: elements[elements.length - 1] ?? null,
+      };
+    });
+
+  const resetView = () =>
+    page.evaluate(() => {
+      const app = window.axdraw;
+      app.clearCanvas();
+      app.state.zoom = 1;
+      app.state.scrollX = 0;
+      app.state.scrollY = 0;
+      app.render();
+    });
+
+  const sketch = async (points) => {
+    await page.keyboard.press("p");
+    await page.mouse.move(points[0][0], points[0][1]);
+    await page.mouse.down();
+    for (const point of points.slice(1)) await page.mouse.move(point[0], point[1], { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(60);
+    return page.evaluate(() => {
+      const element = window.axdraw.elements.filter((item) => !item.isDeleted).pop();
+      return {
+        type: element.type,
+        points: element.points ? element.points.length : 0,
+        angle: Number(element.angle.toFixed(2)),
+      };
+    });
+  };
+
+  /* ---------------- drawing & transforms ---------------- */
+
+  await page.keyboard.press("r");
+  await drag([420, 200], [620, 320]);
+  let state = await scene();
+  check("rectangle tool draws a rectangle", state.n === 1 && state.types[0] === "rectangle");
+
+  await page.mouse.click(420, 200);
+  check("clicking the outline selects it", (await scene()).selected === 1);
+
+  await drag([620, 320], [680, 380]);
+  state = await scene();
+  check("south-east handle resizes", state.last.width > 240 && state.last.height > 160);
+
+  const angleBefore = (await scene()).last.angle;
+  await drag([550, 180], [640, 220]);
+  check("rotation handle rotates", Math.abs((await scene()).last.angle - angleBefore) > 0.1);
+  await page.keyboard.press("Control+z");
+
+  /* ---------------- arrows & binding ---------------- */
+
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([300, 300], [440, 400]);
+  await page.keyboard.press("o");
+  await drag([700, 300], [840, 400]);
+  await page.keyboard.press("a");
+  await drag([445, 350], [695, 350]);
+
+  const binding = await page.evaluate(() => {
+    const arrow = window.axdraw.elements.find((element) => element.type === "arrow");
+    return { start: !!arrow.startBinding, end: !!arrow.endBinding };
+  });
+  check("an arrow binds to the shapes at both ends", binding.start && binding.end, JSON.stringify(binding));
+
+  await page.keyboard.press("v");
+  await page.mouse.click(770, 300);
+  await drag([770, 300], [770, 200]);
+  const tipY = await page.evaluate(() => {
+    const arrow = window.axdraw.elements.find((element) => element.type === "arrow");
+    return Math.round(arrow.y + arrow.points[arrow.points.length - 1][1]);
+  });
+  check("a bound arrow follows the shape it points at", tipY < 340, `tip y = ${tipY}`);
+
+  /* ---------------- text ---------------- */
+
+  await page.mouse.dblclick(370, 350);
+  await page.keyboard.type("라벨");
+  await page.keyboard.press("Escape");
+  const label = await page.evaluate(() => {
+    const text = window.axdraw.elements.find((element) => element.type === "text");
+    const container = window.axdraw.elements.find((element) => element.id === text?.containerId);
+    return {
+      text: text?.text,
+      centred: text && container
+        ? Math.abs(text.x + text.width / 2 - (container.x + container.width / 2)) < 1
+        : false,
+      linked: !!container?.boundElements?.some((bound) => bound.type === "text" && bound.id === text.id),
+    };
+  });
+  check("double-click labels a shape", label.text === "라벨" && label.linked && label.centred, JSON.stringify(label));
+
+  /* ---------------- multi-point lines ---------------- */
+
+  await page.keyboard.press("l");
+  await page.mouse.click(900, 500);
+  await page.mouse.click(1000, 560);
+  await page.mouse.click(1100, 480);
+  await page.keyboard.press("Enter");
+  const linePoints = await page.evaluate(() => {
+    const line = window.axdraw.elements.filter((element) => element.type === "line").pop();
+    return line ? line.points.length : 0;
+  });
+  check("click-click-Enter draws a multi-point line", linePoints === 3, `points = ${linePoints}`);
+
+  /* ---------------- eraser, clipboard, groups ---------------- */
+
+  const beforeErase = (await scene()).n;
+  await page.keyboard.press("e");
+  await drag([300, 300], [440, 300], 20);
+  check("the eraser deletes what it touches", (await scene()).n < beforeErase);
+  await page.keyboard.press("Control+z");
+  check("undo brings erased elements back", (await scene()).n === beforeErase);
+
+  await page.keyboard.press("v");
+  await page.keyboard.press("Control+a");
+  const beforeCopy = (await scene()).n;
+  await page.evaluate(() => {
+    window.axdraw.copySelection();
+    window.axdraw.pasteFromClipboard();
+  });
+  await page.waitForTimeout(120);
+  check("copy and paste duplicates the selection", (await scene()).n === beforeCopy * 2);
+  await page.keyboard.press("Control+z");
+
+  await page.keyboard.press("Control+a");
+  await page.keyboard.press("Control+g");
+  check(
+    "grouping tags the selection",
+    (await page.evaluate(() => window.axdraw.elements.filter((element) => element.groupIds.length).length)) > 1,
+  );
+  await page.keyboard.press("Control+Shift+g");
+  check(
+    "ungrouping clears the tags",
+    (await page.evaluate(() => window.axdraw.elements.filter((element) => element.groupIds.length).length)) === 0,
+  );
+
+  /* ---------------- shape recognition ---------------- */
+
+  await resetView();
+  let result = await sketch([[400, 150], [500, 153], [600, 149], [700, 152]]);
+  check("a rough stroke becomes a straight line", result.type === "line" && result.points === 2, JSON.stringify(result));
+
+  result = await sketch([[400, 220], [520, 222], [640, 219], [700, 221], [672, 205], [700, 221], [674, 236]]);
+  check("a shaft with a head becomes an arrow", result.type === "arrow", JSON.stringify(result));
+
+  result = await sketch([[500, 300], [430, 420], [575, 418], [502, 303]]);
+  check("three corners become a triangle", result.type === "line" && result.points >= 4, JSON.stringify(result));
+
+  result = await sketch([[800, 300], [870, 360], [802, 422], [733, 361], [799, 303]]);
+  check("a rough diamond becomes a diamond", result.type === "diamond", JSON.stringify(result));
+
+  result = await sketch([[950, 300], [1060, 340], [1030, 420], [920, 378], [948, 303]]);
+  check("a tilted box keeps its angle", result.type === "rectangle" && Math.abs(result.angle) > 0.1, JSON.stringify(result));
+
+  result = await sketch([[400, 500], [440, 540], [410, 560], [470, 520], [430, 590], [500, 540], [460, 600], [520, 560]]);
+  check("a scribble stays freehand", result.type === "freedraw", JSON.stringify(result));
+
+  await page.evaluate(() => {
+    window.axdraw.state.shapeRecognition = false;
+  });
+  result = await sketch([[700, 500], [800, 505], [805, 590], [702, 588], [699, 503]]);
+  check("shape assist can be turned off", result.type === "freedraw", JSON.stringify(result));
+  await page.evaluate(() => {
+    window.axdraw.state.shapeRecognition = true;
+  });
+
+  /* ---------------- persistence ---------------- */
+
+  const beforeReload = (await scene()).n;
+  await page.waitForTimeout(600);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForTimeout(300);
+  check("the scene survives a reload", (await scene()).n === beforeReload);
+
+  /* ---------------- export ---------------- */
+
+  const svg = await page.evaluate(() => {
+    const originalCreate = URL.createObjectURL;
+    const originalClick = HTMLAnchorElement.prototype.click;
+    let captured = null;
+    URL.createObjectURL = (blob) => {
+      captured = blob;
+      return originalCreate.call(URL, blob);
+    };
+    HTMLAnchorElement.prototype.click = function () {};
+    window.axdraw.exportSvg({});
+    HTMLAnchorElement.prototype.click = originalClick;
+    URL.createObjectURL = originalCreate;
+    return captured ? captured.text() : null;
+  });
+  check("SVG export is well formed", !!svg && svg.startsWith("<?xml") && svg.includes("</svg>"));
+  const svgParsed = await page.evaluate((text) => {
+    const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+    return { error: !!doc.querySelector("parsererror"), paths: doc.querySelectorAll("path").length };
+  }, svg ?? "");
+  check("SVG export parses and contains geometry", !svgParsed.error && svgParsed.paths > 0, JSON.stringify(svgParsed));
+
+  const png = await page.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    void canvas;
+    const blob = await new Promise((resolve) => {
+      const app = window.axdraw;
+      const originalCreate = URL.createObjectURL;
+      const originalClick = HTMLAnchorElement.prototype.click;
+      URL.createObjectURL = (value) => {
+        resolve(value);
+        return originalCreate.call(URL, value);
+      };
+      HTMLAnchorElement.prototype.click = function () {};
+      void app.exportPng({ scale: 1 }).then(() => {
+        HTMLAnchorElement.prototype.click = originalClick;
+        URL.createObjectURL = originalCreate;
+      });
+    });
+    return { type: blob.type, size: blob.size };
+  });
+  check("PNG export produces an image", png.type === "image/png" && png.size > 1000, JSON.stringify(png));
+
+  /* ---------------- scene file round trip ---------------- */
+
+  const roundTrip = await page.evaluate(async () => {
+    const app = window.axdraw;
+    const before = app.elements.filter((element) => !element.isDeleted).length;
+    const json = JSON.stringify({
+      type: "axdraw",
+      version: 1,
+      source: "test",
+      elements: app.elements.filter((element) => !element.isDeleted),
+      appState: {},
+      files: app.files,
+    });
+    await app.loadFromFile(new Blob([json], { type: "application/json" }));
+    return { before, after: app.elements.filter((element) => !element.isDeleted).length };
+  });
+  check("a saved scene file loads back", roundTrip.before === roundTrip.after, JSON.stringify(roundTrip));
+
+  /* ---------------- images ---------------- */
+
+  const image = await page.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 120;
+    canvas.height = 80;
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#1971c2";
+    context.fillRect(0, 0, 120, 80);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    await window.axdraw.addImage(blob, { x: 200, y: 200 });
+    const element = window.axdraw.elements.find((item) => item.type === "image");
+    return element ? { fileId: !!element.fileId, hasFile: !!window.axdraw.files[element.fileId] } : null;
+  });
+  check("images can be added to the scene", !!image?.fileId && image.hasFile, JSON.stringify(image));
+
+  /* ---------------- snapping ---------------- */
+
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([400, 200], [520, 280]);
+  await page.keyboard.press("r");
+  await drag([700, 400], [820, 480]);
+  await page.keyboard.press("v");
+  await page.mouse.click(730, 400);
+  await drag([730, 400], [733, 205], 20);
+  const snapped = await page.evaluate(() => {
+    const elements = window.axdraw.elements.filter((element) => !element.isDeleted);
+    return { a: Math.round(elements[0].y), b: Math.round(elements[1].y) };
+  });
+  check("object snapping aligns edges", snapped.a === snapped.b, JSON.stringify(snapped));
+
+  /* ---------------- view options ---------------- */
+
+  await page.keyboard.press("Control+'");
+  check("the grid toggles", await page.evaluate(() => window.axdraw.state.gridEnabled));
+  await page.keyboard.press("Control+'");
+
+  await page.evaluate(() => window.axdraw.setTheme("dark"));
+  check("dark theme applies", await page.evaluate(() => document.documentElement.dataset.theme === "dark"));
+  if (SCREENSHOT_DIR) await page.screenshot({ path: `${SCREENSHOT_DIR}/dark.png` });
+  await page.evaluate(() => window.axdraw.setTheme("light"));
+
+  await page.keyboard.press("Shift+1");
+  const zoom = await page.evaluate(() => window.axdraw.state.zoom);
+  check("zoom to fit picks a sane zoom", zoom > 0.1 && zoom <= 1.5, `zoom = ${zoom.toFixed(2)}`);
+
+  if (SCREENSHOT_DIR) await page.screenshot({ path: `${SCREENSHOT_DIR}/final.png` });
+
+  check("no console or page errors", errors.length === 0, errors.join(" | "));
+
+  console.log(`\n${passed} passed, ${failed} failed`);
+} finally {
+  await browser?.close();
+  try {
+    process.kill(-server.pid);
+  } catch {
+    // Already gone.
+  }
+}
+
+process.exit(failed === 0 ? 0 : 1);
