@@ -108,9 +108,11 @@ npm run build              # dist/
 VITE_BASE=/axdraw/ npm run build   # 하위 경로로 서비스할 때
 ```
 
-`.github/workflows/deploy.yml`에 GitHub Pages 배포 워크플로가 들어 있습니다. **기본 브랜치에 푸시하면 자동으로 배포됩니다.** 워크플로가 Pages를 GitHub Actions 소스로 직접 켜기 때문에 Settings → Pages를 사람이 먼저 건드릴 필요는 없습니다.
+`.github/workflows/deploy.yml`에 GitHub Pages 배포 워크플로가 들어 있습니다. **처음 한 번은 저장소 Settings → Pages에서 Source를 "GitHub Actions"로 바꿔야 합니다.** 이후로는 기본 브랜치에 푸시할 때마다 자동 배포됩니다.
 
-기본 브랜치 이름은 무엇이든 상관없습니다. 워크플로는 모든 브랜치의 푸시를 받되 `github.event.repository.default_branch`와 일치할 때만 빌드·배포하므로, 브랜치가 `main`이 아니어도 조용히 아무 일도 일어나지 않는 상황은 생기지 않습니다. 배포 경로(`VITE_BASE`)는 `actions/configure-pages`가 알려주는 값을 쓰기 때문에 프로젝트 사이트(`/axdraw/`)와 사용자 사이트(`/`) 모두 맞습니다.
+이 한 번의 수동 단계는 없앨 수 없습니다. 워크플로가 `actions/configure-pages`의 `enablement` 옵션으로 Pages를 직접 켜려면 저장소 관리자 권한이 필요한데, Actions의 기본 `GITHUB_TOKEN`에는 그 권한이 없어서 `Resource not accessible by integration` 으로 실패합니다. Pages가 켜지기 전에는 `actions/deploy-pages` 도 `404 ... Ensure GitHub Pages has been enabled` 로 실패합니다.
+
+기본 브랜치 이름은 무엇이든 상관없습니다. 워크플로는 모든 브랜치의 푸시를 받되 `github.event.repository.default_branch`와 일치할 때만 빌드·배포하므로, 브랜치가 `main`이 아니어도 조용히 아무 일도 일어나지 않는 상황은 생기지 않습니다. 배포 경로(`VITE_BASE`)는 저장소 이름에서 계산해 프로젝트 사이트(`/axdraw/`)와 사용자·조직 사이트(`/`) 모두 맞춥니다.
 
 ---
 
