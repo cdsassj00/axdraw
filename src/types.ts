@@ -200,3 +200,24 @@ export interface Bounds {
   x2: number;
   y2: number;
 }
+
+/** A reading of a freehand stroke the user can switch to after shape assist. */
+export type RecognitionChoiceType = "rectangle" | "ellipse" | "diamond" | "freedraw";
+
+export interface RecognitionChoiceOption {
+  type: RecognitionChoiceType;
+  label: string;
+}
+
+/**
+ * State behind the "did you mean" chip: what shape assist landed on, the
+ * original stroke so freehand stays reachable, and the fitted box the
+ * alternates are drawn into.
+ */
+export interface RecognitionChoice {
+  elementId: string;
+  original: FreedrawElement;
+  frame: { cx: number; cy: number; width: number; height: number; angle: number };
+  options: RecognitionChoiceOption[];
+  active: RecognitionChoiceType;
+}

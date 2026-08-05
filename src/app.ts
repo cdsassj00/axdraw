@@ -83,7 +83,7 @@ import {
   getLinearPointIndexAt,
   hitTest,
 } from "./element/hit";
-import { recognizeShape, type Pt, type Recognized } from "./element/recognize";
+import { recognizeFrame, recognizeShape, type Pt, type Recognized } from "./element/recognize";
 import {
   getHandleAtPosition,
   getResizeCursor,
@@ -129,6 +129,9 @@ import type {
   FreedrawElement,
   ItemStyle,
   LinearElement,
+  RecognitionChoice,
+  RecognitionChoiceOption,
+  RecognitionChoiceType,
   Point,
   TextElement,
   ToolType,
@@ -566,6 +569,11 @@ export class App {
   private handlePointerDown = (event: PointerEvent): void => {
     if (event.button === 2) return;
     this.trackPointerPrecision(event);
+    // Any fresh interaction on the canvas retires the previous suggestion.
+    if (this.recognitionChoice) {
+      this.recognitionChoice = null;
+      this.notify();
+    }
     this.activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
     // A second finger turns the gesture into pinch-zoom/pan.
@@ -1394,12 +1402,106 @@ export class App {
         if (replacement) {
           this.elements = this.elements.map((item) => (item.id === element.id ? replacement : item));
           this.afterCreate(replacement, false);
+          this.openRecognitionChoice(element, absolute, replacement);
           return;
         }
       }
+      this.afterCreate(element, false);
+      // Nothing scored well enough, so the stroke stayed freehand. Offer the
+      // shapes it *could* have been rather than leaving the user to redraw.
+      this.openRecognitionChoice(element, absolute, element);
+      return;
     }
 
     this.afterCreate(element, false);
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Recognition choice
+   *
+   * Shape assist has to guess, and a guess the user cannot correct is worse
+   * than no guess. After every recognised stroke we keep the original freehand
+   * points and the fitted frame around, so the alternates are one click away
+   * until the next action. Nothing here mutates history on its own — picking an
+   * option is a normal commit, so undo still walks back through it.
+   * ---------------------------------------------------------------- */
+
+  recognitionChoice: RecognitionChoice | null = null;
+
+  private openRecognitionChoice(
+    original: FreedrawElement,
+    absolute: Pt[],
+    applied: AxElement,
+  ): void {
+    const frame = recognizeFrame(absolute);
+    if (!frame) {
+      // An open stroke (line, arrow) or something too small to reframe. The
+      // alternates below are all closed shapes, so there is nothing to offer.
+      this.recognitionChoice = null;
+      this.notify();
+      return;
+    }
+
+    const options: RecognitionChoiceOption[] = [
+      { type: "rectangle", label: "사각형" },
+      { type: "ellipse", label: "타원" },
+      { type: "diamond", label: "마름모" },
+      { type: "freedraw", label: "손그림" },
+    ];
+
+    this.recognitionChoice = {
+      elementId: applied.id,
+      original,
+      frame,
+      options,
+      active: applied.type === "freedraw" ? "freedraw" : (applied.type as RecognitionChoiceType),
+    };
+    this.notify();
+  }
+
+  /** Swap the recognised element for a different reading of the same stroke. */
+  applyRecognitionChoice(type: RecognitionChoiceType): void {
+    const choice = this.recognitionChoice;
+    if (!choice || choice.active === type) return;
+
+    const current = this.elements.find((item) => item.id === choice.elementId);
+    if (!current) {
+      this.recognitionChoice = null;
+      this.notify();
+      return;
+    }
+
+    const replacement =
+      type === "freedraw"
+        ? { ...choice.original, id: choice.elementId }
+        : this.buildRecognizedElement({
+            type,
+            cx: choice.frame.cx,
+            cy: choice.frame.cy,
+            width: choice.frame.width,
+            height: choice.frame.height,
+            angle: choice.frame.angle,
+          });
+    if (!replacement) return;
+
+    replacement.id = choice.elementId;
+    // History dedupes on id:version, and a rebuilt element starts back at 1.
+    // Without this, swapping between two alternates looks like no change at all
+    // and undo skips straight past it.
+    replacement.version = current.version + 1;
+    this.elements = this.elements.map((item) =>
+      item.id === choice.elementId ? replacement : item,
+    );
+    this.state.selectedIds = new Set([choice.elementId]);
+    this.recognitionChoice = { ...choice, active: type };
+    clearShapeCache();
+    this.commit();
+  }
+
+  dismissRecognitionChoice(): void {
+    if (!this.recognitionChoice) return;
+    this.recognitionChoice = null;
+    this.notify();
   }
 
   /** Convert a recognizer result into a real element with the current style. */
@@ -1681,7 +1783,11 @@ export class App {
     }
 
     if (key === "Escape") {
-      if (this.multiPointElement) {
+      if (this.recognitionChoice) {
+        // Dismiss the suggestion first — it is the most recent thing on screen,
+        // so it is what Escape should retract.
+        this.dismissRecognitionChoice();
+      } else if (this.multiPointElement) {
         this.finishMultiPoint();
       } else if (this.editingLinearId) {
         this.editingLinearId = null;

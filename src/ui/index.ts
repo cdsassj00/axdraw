@@ -19,6 +19,7 @@ import type { Arrowhead, AxElement, FontFamily, ItemStyle, ToolType } from "../t
 import { openConfirmDialog, openExportDialog, openHelpDialog, showToast } from "./dialogs";
 import { button, dismissable, h } from "./dom";
 import { iconEl } from "./icons";
+import { createRecognitionChip } from "./recognitionChip";
 
 interface ToolDefinition {
   tool: ToolType;
@@ -58,6 +59,8 @@ export function createUI(app: App): void {
   const welcome = h("div", { class: "welcome" });
 
   root.append(topLeft, toolbar, topRight, bottomLeft, bottomRight, panel, welcome);
+
+  createRecognitionChip(app, root);
 
   let sliderActive = false;
   window.addEventListener("pointerup", () => {

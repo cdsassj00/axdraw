@@ -691,3 +691,82 @@ input[type="range"] {
     display: none;
   }
 }
+
+/* ---------------------------------------------------------------- *
+ * Recognition chip
+ *
+ * Sits on the canvas next to a just-recognised shape, so it borrows the
+ * island treatment rather than introducing a second surface style. Positioned
+ * with a transform (compositor-only) because it is repositioned on every pan
+ * and zoom frame.
+ * ---------------------------------------------------------------- */
+
+.ax-recognition-chip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  background: var(--island-bg);
+  border: 1px solid var(--island-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+  z-index: 5;
+  animation: ax-chip-in 140ms ease-out;
+}
+
+.ax-recognition-chip[hidden] {
+  display: none;
+}
+
+.ax-recognition-chip .chip-option {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.ax-recognition-chip .chip-option:hover {
+  background: var(--button-hover);
+  color: var(--text);
+}
+
+.ax-recognition-chip .chip-option.active {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.ax-recognition-chip .chip-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Opacity only: the element's transform carries its position, so animating
+   transform here would fight the layout for the duration of the fade. */
+@keyframes ax-chip-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ax-recognition-chip {
+    animation: none;
+  }
+  .ax-recognition-chip .chip-option {
+    transition: none;
+  }
+}

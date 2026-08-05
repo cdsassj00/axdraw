@@ -526,6 +526,48 @@ export function recognizeShape(points: Pt[], options: RecognizeOptions = {}): Re
   return { type: winner.type, cx: winner.frame.cx, cy: winner.frame.cy, width, height, angle };
 }
 
+/**
+ * The box the recogniser would fit a closed stroke into, whatever it decided
+ * the stroke actually was.
+ *
+ * `recognizeShape` is deliberately conservative and returns null when nothing
+ * scores well, which leaves an ambiguous scribble as freehand with no way to
+ * say "no, that was a diamond". This exposes the frame on its own so the UI can
+ * offer rectangle/ellipse/diamond over the same box — the geometry is already
+ * computed, it was just being thrown away with the losing candidates.
+ *
+ * Returns null for strokes too open or too small to have a meaningful box.
+ */
+export function recognizeFrame(points: Pt[], options: RecognizeOptions = {}): Frame | null {
+  const config = { ...DEFAULTS, ...options };
+  if (points.length < 8) return null;
+
+  const box = boundingBox(points);
+  const diagonal = Math.hypot(box.width, box.height);
+  if (diagonal < 16) return null;
+
+  // Same closed-stroke test recognizeShape uses.
+  const closingDistance = distance(points[0], points[points.length - 1]);
+  const closed = closingDistance < diagonal * 0.28 && pathLength(points) > diagonal * 1.6;
+  if (!closed) return null;
+
+  const closedPoints = resample([...points, points[0]], 72);
+  const frame = normalizeFrame(minAreaRect(closedPoints));
+  if (frame.width < 8 || frame.height < 8) return null;
+
+  let { width, height, angle } = frame;
+  if (Math.abs(angle) < config.angleTolerance) angle = 0;
+  if (config.snapEqualSides) {
+    const ratio = Math.min(width, height) / Math.max(width, height);
+    if (ratio > 0.88) {
+      const side = (width + height) / 2;
+      width = side;
+      height = side;
+    }
+  }
+  return { cx: frame.cx, cy: frame.cy, width, height, angle };
+}
+
 /** Bring a frame's angle into (-45°, 45°] by swapping its sides. */
 function normalizeFrame(frame: Frame): Frame {
   const { width, height, angle } = normalizeRectAngle(frame);

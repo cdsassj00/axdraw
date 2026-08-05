@@ -353,6 +353,75 @@ try {
   });
   check("object snapping aligns edges", snapped.a === snapped.b, JSON.stringify(snapped));
 
+  /* ---------------- recognition chip ---------------- */
+
+  await resetView();
+  await page.keyboard.press("p");
+  {
+    const cx = 420;
+    const cy = 330;
+    const r = 95;
+    await page.mouse.move(cx + r, cy);
+    await page.mouse.down();
+    for (let a = 0; a <= Math.PI * 2 + 0.15; a += 0.14) {
+      const w = r + Math.sin(a * 5) * 4;
+      await page.mouse.move(cx + Math.cos(a) * w, cy + Math.sin(a) * w * 0.92);
+    }
+    await page.mouse.up();
+  }
+  await page.waitForTimeout(250);
+
+  const chipState = () =>
+    page.evaluate(() => {
+      const chip = document.querySelector(".ax-recognition-chip");
+      const element = window.axdraw.elements.filter((item) => !item.isDeleted).at(-1);
+      return {
+        visible: !!chip && !chip.hidden,
+        active: chip?.querySelector(".chip-option.active")?.textContent ?? null,
+        type: element?.type,
+      };
+    });
+
+  const afterSketch = await chipState();
+  check(
+    "a recognised stroke offers alternates",
+    afterSketch.visible && afterSketch.type === "ellipse",
+    JSON.stringify(afterSketch),
+  );
+
+  await page.click(".ax-recognition-chip .chip-option:nth-child(3)");
+  await page.waitForTimeout(150);
+  const asDiamond = await chipState();
+  check(
+    "picking an alternate reshapes the element",
+    asDiamond.type === "diamond" && asDiamond.active === "마름모",
+    JSON.stringify(asDiamond),
+  );
+
+  await page.click(".ax-recognition-chip .chip-option:nth-child(4)");
+  await page.waitForTimeout(150);
+  const asFreehand = await chipState();
+  check(
+    "the original freehand stroke stays reachable",
+    asFreehand.type === "freedraw",
+    JSON.stringify(asFreehand),
+  );
+
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(150);
+  const afterUndo = await page.evaluate(
+    () => window.axdraw.elements.filter((item) => !item.isDeleted).at(-1)?.type,
+  );
+  check("undo walks back through the choices", afterUndo === "diamond", String(afterUndo));
+
+  await page.mouse.click(820, 620);
+  await page.waitForTimeout(150);
+  const dismissed = await page.evaluate(() => {
+    const chip = document.querySelector(".ax-recognition-chip");
+    return !chip || chip.hidden;
+  });
+  check("the next canvas action dismisses the chip", dismissed);
+
   /* ---------------- resize cursors ---------------- */
 
   // Regression: the cursor was computed on hover but only written to the DOM
