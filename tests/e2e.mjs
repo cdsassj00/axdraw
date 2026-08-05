@@ -353,6 +353,55 @@ try {
   });
   check("object snapping aligns edges", snapped.a === snapped.b, JSON.stringify(snapped));
 
+  /* ---------------- resize cursors ---------------- */
+
+  // Regression: the cursor was computed on hover but only written to the DOM
+  // during a render. Approaching a handle across empty canvas schedules no
+  // render, so the resize cursor never appeared. Each case below parks the
+  // pointer far away first, so the only thing that can set the cursor is the
+  // move onto the handle itself.
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([300, 250], [500, 400]);
+  await page.keyboard.press("v");
+  await page.mouse.click(300, 250);
+
+  const cursorAt = async (x, y) => {
+    await page.mouse.move(760, 640);
+    await page.mouse.move(x, y, { steps: 3 });
+    await page.waitForTimeout(60);
+    return page.evaluate(() => document.getElementById("root").style.cursor);
+  };
+
+  const handleCursors = [
+    ["nw", 300, 250, "nwse-resize"],
+    ["ne", 500, 250, "nesw-resize"],
+    ["sw", 300, 400, "nesw-resize"],
+    ["se", 500, 400, "nwse-resize"],
+    ["n", 400, 250, "ns-resize"],
+    ["s", 400, 400, "ns-resize"],
+    ["w", 300, 325, "ew-resize"],
+    ["e", 500, 325, "ew-resize"],
+  ];
+  const wrongCursors = [];
+  for (const [name, x, y, want] of handleCursors) {
+    const got = await cursorAt(x, y);
+    if (got !== want) wrongCursors.push(`${name}: ${got} != ${want}`);
+  }
+  check(
+    "every transform handle shows its resize cursor",
+    wrongCursors.length === 0,
+    wrongCursors.join(", ") || `${handleCursors.length} handles`,
+  );
+
+  // The grab area has to be wider than the drawn handle, or the cursor only
+  // appears when the pointer is dead centre on an 8px square.
+  const nearMiss = await cursorAt(510, 410);
+  check("the handle grab area extends past the drawn handle", nearMiss === "nwse-resize", nearMiss);
+
+  const offHandle = await cursorAt(560, 460);
+  check("the resize cursor clears away from the handle", offHandle !== "nwse-resize", offHandle);
+
   /* ---------------- view options ---------------- */
 
   await page.keyboard.press("Control+'");

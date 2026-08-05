@@ -93,7 +93,16 @@ export const DEFAULT_GRID_SIZE = 20;
 export const DRAG_THRESHOLD = 3;
 /** Hit-test tolerance in screen px. */
 export const HIT_THRESHOLD = 10;
+/** Side of the drawn transform handle, in screen px. */
 export const HANDLE_SIZE = 8;
+/**
+ * Half-side of the *grab* area around a transform handle, in screen px. Larger
+ * than the drawn handle on purpose: 12 gives a 24px target, the WCAG 2.2
+ * minimum, so the resize cursor shows up wherever the corner looks grabbable.
+ */
+export const HANDLE_HIT_RADIUS = 12;
+/** Grab area for coarse pointers (touch, pen), which land far less precisely. */
+export const HANDLE_HIT_RADIUS_COARSE = 20;
 export const ROTATE_HANDLE_DISTANCE = 20;
 export const LINE_CONFIRM_THRESHOLD = 8;
 export const MAX_BINDING_GAP = 32;

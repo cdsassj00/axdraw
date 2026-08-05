@@ -1,6 +1,6 @@
 /** Transform handles, resizing and rotation. */
 
-import { HANDLE_SIZE, ROTATE_HANDLE_DISTANCE } from "../constants";
+import { HANDLE_HIT_RADIUS, HANDLE_SIZE, ROTATE_HANDLE_DISTANCE } from "../constants";
 import type { AxElement, Bounds, Point, TextElement } from "../types";
 import { getElementAbsoluteCoords, hasPoints, rotate } from "./bounds";
 import { mutateElement } from "./factory";
@@ -64,18 +64,39 @@ export function getTransformHandles(
   });
 }
 
+/**
+ * Find the transform handle under `point`.
+ *
+ * The grab area is deliberately larger than the drawn handle: an 8px square is
+ * the right *look*, but aiming for a 14px box means the resize cursor never
+ * appears when the pointer is visibly "on the corner". The hit radius is in
+ * screen pixels (hence the zoom divide) so the target stays the same physical
+ * size at every zoom level.
+ *
+ * Nearest handle wins. With a grab area this size the corner and side handles
+ * of a small selection overlap, and picking the first match in array order
+ * would hand back whichever happened to be pushed first.
+ */
 export function getHandleAtPosition(
   handles: TransformHandle[],
   point: Point,
   zoom: number,
+  hitRadius = HANDLE_HIT_RADIUS,
 ): TransformHandle | null {
-  const radius = (HANDLE_SIZE / zoom) * 0.9;
+  const radius = hitRadius / zoom;
+  let best: TransformHandle | null = null;
+  let bestDistance = Infinity;
   for (const handle of handles) {
-    if (Math.abs(handle.x - point.x) <= radius && Math.abs(handle.y - point.y) <= radius) {
-      return handle;
+    const dx = Math.abs(handle.x - point.x);
+    const dy = Math.abs(handle.y - point.y);
+    if (dx > radius || dy > radius) continue;
+    const distance = dx * dx + dy * dy;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = handle;
     }
   }
-  return null;
+  return best;
 }
 
 export function getResizeCursor(type: TransformHandleType, angle: number): string {

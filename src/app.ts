@@ -39,6 +39,8 @@ import {
   DRAG_THRESHOLD,
   ELEMENT_TRANSLATE_AMOUNT,
   FILE_EXTENSION,
+  HANDLE_HIT_RADIUS,
+  HANDLE_HIT_RADIUS_COARSE,
   HIT_THRESHOLD,
   LASER_TRAIL_MS,
   LINE_CONFIRM_THRESHOLD,
@@ -192,6 +194,13 @@ export class App {
   private renderScheduled = false;
   private saveTimer: number | null = null;
   private cursorOverride: string | null = null;
+  private appliedCursor = "";
+  /**
+   * Grab area for transform handles, in screen px. Widened for touch and pen,
+   * which land far less precisely than a mouse. Updated on every pointer event
+   * so switching between a trackpad and a stylus mid-session works.
+   */
+  private handleHitRadius = HANDLE_HIT_RADIUS;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -469,17 +478,28 @@ export class App {
 
   private marqueeBounds: { x1: number; y1: number; x2: number; y2: number } | null = null;
 
+  /**
+   * Push the current cursor to the DOM.
+   *
+   * Called from both the render loop and directly on hover: hovering a
+   * transform handle changes nothing that needs repainting, so waiting for the
+   * next render would leave the resize cursor stuck until something else
+   * happened to schedule one — which is why approaching a handle from empty
+   * canvas used to show no resize cursor at all.
+   */
   private updateCursor(): void {
-    if (this.cursorOverride) {
-      this.container.style.cursor = this.cursorOverride;
-      return;
-    }
+    const next = this.computeCursor();
+    if (next === this.appliedCursor) return;
+    this.appliedCursor = next;
+    this.container.style.cursor = next;
+  }
+
+  private computeCursor(): string {
+    if (this.cursorOverride) return this.cursorOverride;
     if (this.spacePressed || this.pointerMode.type === "pan") {
-      this.container.style.cursor = this.pointerMode.type === "pan" ? "grabbing" : "grab";
-      return;
+      return this.pointerMode.type === "pan" ? "grabbing" : "grab";
     }
-    const tool = this.state.tool;
-    this.container.style.cursor = TOOL_CURSORS[tool] ?? "crosshair";
+    return TOOL_CURSORS[this.state.tool] ?? "crosshair";
   }
 
   /* ---------------------------------------------------------------- *
@@ -545,6 +565,7 @@ export class App {
 
   private handlePointerDown = (event: PointerEvent): void => {
     if (event.button === 2) return;
+    this.trackPointerPrecision(event);
     this.activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
     // A second finger turns the gesture into pinch-zoom/pan.
@@ -658,7 +679,7 @@ export class App {
           : getSelectionBounds(selected)!;
       const angle = selected.length === 1 ? selected[0].angle : 0;
       const handles = getTransformHandles(bounds, angle, this.state.zoom);
-      const handle = getHandleAtPosition(handles, scene, this.state.zoom);
+      const handle = getHandleAtPosition(handles, scene, this.state.zoom, this.handleHitRadius);
       if (handle) {
         const originals = this.snapshot(selected);
         if (handle.type === "rotation") {
@@ -878,7 +899,15 @@ export class App {
    * Pointer: move
    * ---------------------------------------------------------------- */
 
+  private trackPointerPrecision(event: PointerEvent): void {
+    this.handleHitRadius =
+      event.pointerType === "touch" || event.pointerType === "pen"
+        ? HANDLE_HIT_RADIUS_COARSE
+        : HANDLE_HIT_RADIUS;
+  }
+
   private handlePointerMove = (event: PointerEvent): void => {
+    this.trackPointerPrecision(event);
     if (this.activePointers.has(event.pointerId)) {
       this.activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     }
@@ -986,10 +1015,14 @@ export class App {
         this.scheduleRender();
       }
       this.updateResizeCursor(scene);
-    } else if (this.hoveredElementId) {
-      this.hoveredElementId = null;
-      this.scheduleRender();
+    } else {
+      if (this.hoveredElementId) {
+        this.hoveredElementId = null;
+        this.scheduleRender();
+      }
+      this.cursorOverride = null;
     }
+    this.updateCursor();
   };
 
   private updateResizeCursor(scene: Point): void {
@@ -1010,6 +1043,7 @@ export class App {
       getTransformHandles(bounds, angle, this.state.zoom),
       scene,
       this.state.zoom,
+      this.handleHitRadius,
     );
     if (handle) {
       this.cursorOverride = getResizeCursor(handle.type, angle);
