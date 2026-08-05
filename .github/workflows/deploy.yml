@@ -1,10 +1,13 @@
 name: Deploy to GitHub Pages
 
-# Publishes the built app to GitHub Pages. Enable it once under
-# Settings → Pages → Source → "GitHub Actions".
+# Publishes the built app to GitHub Pages.
+#
+# Listening on every branch and gating the jobs on the default branch keeps this
+# working whatever the default branch is called — pinning the trigger to
+# [main, master] silently deploys nothing on a repository named otherwise.
 on:
   push:
-    branches: [main, master]
+    branches: ["**"]
   workflow_dispatch:
 
 permissions:
@@ -12,12 +15,14 @@ permissions:
   pages: write
   id-token: write
 
+# Never cancel a deployment that is already publishing; queue behind it instead.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
+    if: github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,17 +37,26 @@ jobs:
           # browser download that playwright's postinstall would otherwise do.
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
       - run: npm run typecheck
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+        with:
+          # Turns Pages on with the "GitHub Actions" source, so the first
+          # deploy does not need anyone to visit Settings → Pages by hand.
+          enablement: true
       - name: Build
         run: npm run build
         env:
-          # Pages serves project sites from /<repository-name>/.
-          VITE_BASE: /${{ github.event.repository.name }}/
+          # Project sites are served from /<repository-name>/, user and org
+          # sites from /. configure-pages reports whichever applies.
+          VITE_BASE: ${{ steps.pages.outputs.base_path }}/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
   deploy:
     needs: build
+    if: github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     environment:
       name: github-pages
