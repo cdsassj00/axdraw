@@ -37,19 +37,16 @@ jobs:
           # browser download that playwright's postinstall would otherwise do.
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
       - run: npm run typecheck
-      - name: Configure Pages
-        id: pages
-        uses: actions/configure-pages@v5
-        with:
-          # Turns Pages on with the "GitHub Actions" source, so the first
-          # deploy does not need anyone to visit Settings → Pages by hand.
-          enablement: true
       - name: Build
         run: npm run build
         env:
           # Project sites are served from /<repository-name>/, user and org
-          # sites from /. configure-pages reports whichever applies.
-          VITE_BASE: ${{ steps.pages.outputs.base_path }}/
+          # sites (a repo named <owner>.github.io) from /. Worked out from the
+          # repository name rather than actions/configure-pages, whose
+          # enablement option needs admin rights the default GITHUB_TOKEN does
+          # not have — it fails the build with "Resource not accessible by
+          # integration" instead of turning Pages on.
+          VITE_BASE: ${{ github.event.repository.name == format('{0}.github.io', github.repository_owner) && '/' || format('/{0}/', github.event.repository.name) }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
