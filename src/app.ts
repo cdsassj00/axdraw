@@ -39,6 +39,8 @@ import {
   DRAG_THRESHOLD,
   ELEMENT_TRANSLATE_AMOUNT,
   FILE_EXTENSION,
+  HANDLE_HIT_RADIUS,
+  HANDLE_HIT_RADIUS_COARSE,
   HIT_THRESHOLD,
   LASER_TRAIL_MS,
   LINE_CONFIRM_THRESHOLD,
@@ -81,7 +83,7 @@ import {
   getLinearPointIndexAt,
   hitTest,
 } from "./element/hit";
-import { recognizeShape, type Pt, type Recognized } from "./element/recognize";
+import { recognizeFrame, recognizeShape, type Pt, type Recognized } from "./element/recognize";
 import {
   getHandleAtPosition,
   getResizeCursor,
@@ -127,6 +129,9 @@ import type {
   FreedrawElement,
   ItemStyle,
   LinearElement,
+  RecognitionChoice,
+  RecognitionChoiceOption,
+  RecognitionChoiceType,
   Point,
   TextElement,
   ToolType,
@@ -192,6 +197,13 @@ export class App {
   private renderScheduled = false;
   private saveTimer: number | null = null;
   private cursorOverride: string | null = null;
+  private appliedCursor = "";
+  /**
+   * Grab area for transform handles, in screen px. Widened for touch and pen,
+   * which land far less precisely than a mouse. Updated on every pointer event
+   * so switching between a trackpad and a stylus mid-session works.
+   */
+  private handleHitRadius = HANDLE_HIT_RADIUS;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -202,7 +214,7 @@ export class App {
       scrollY: 0,
       zoom: 1,
       theme: "light",
-      viewBackgroundColor: "#ffffff",
+      viewBackgroundColor: CANVAS_BACKGROUND_BY_THEME.light,
       gridEnabled: false,
       gridSize: DEFAULT_GRID_SIZE,
       snapEnabled: true,
@@ -219,6 +231,11 @@ export class App {
     this.staticCanvas.className = "ax-canvas ax-canvas--static";
     this.interactiveCanvas = document.createElement("canvas");
     this.interactiveCanvas.className = "ax-canvas ax-canvas--interactive";
+    // Focusable so UI layers can hand focus back to the canvas. Without this,
+    // focus stays on whatever input was just dismissed and the keyboard
+    // handler treats every following keystroke as typing.
+    if (!container.hasAttribute("tabindex")) container.tabIndex = -1;
+
     this.overlay = document.createElement("div");
     this.overlay.className = "ax-overlay";
 
@@ -469,17 +486,28 @@ export class App {
 
   private marqueeBounds: { x1: number; y1: number; x2: number; y2: number } | null = null;
 
+  /**
+   * Push the current cursor to the DOM.
+   *
+   * Called from both the render loop and directly on hover: hovering a
+   * transform handle changes nothing that needs repainting, so waiting for the
+   * next render would leave the resize cursor stuck until something else
+   * happened to schedule one — which is why approaching a handle from empty
+   * canvas used to show no resize cursor at all.
+   */
   private updateCursor(): void {
-    if (this.cursorOverride) {
-      this.container.style.cursor = this.cursorOverride;
-      return;
-    }
+    const next = this.computeCursor();
+    if (next === this.appliedCursor) return;
+    this.appliedCursor = next;
+    this.container.style.cursor = next;
+  }
+
+  private computeCursor(): string {
+    if (this.cursorOverride) return this.cursorOverride;
     if (this.spacePressed || this.pointerMode.type === "pan") {
-      this.container.style.cursor = this.pointerMode.type === "pan" ? "grabbing" : "grab";
-      return;
+      return this.pointerMode.type === "pan" ? "grabbing" : "grab";
     }
-    const tool = this.state.tool;
-    this.container.style.cursor = TOOL_CURSORS[tool] ?? "crosshair";
+    return TOOL_CURSORS[this.state.tool] ?? "crosshair";
   }
 
   /* ---------------------------------------------------------------- *
@@ -525,6 +553,8 @@ export class App {
   /** Set by the UI so right-click can open the menu. */
   onContextMenu: ((point: Point, clientX: number, clientY: number) => void) | null = null;
   onError: ((message: string) => void) | null = null;
+  /** Set by the UI layer; toggles the command palette. */
+  onToggleCommandPalette: (() => void) | null = null;
 
   private handleContextMenu = (event: MouseEvent): void => {
     event.preventDefault();
@@ -545,6 +575,12 @@ export class App {
 
   private handlePointerDown = (event: PointerEvent): void => {
     if (event.button === 2) return;
+    this.trackPointerPrecision(event);
+    // Any fresh interaction on the canvas retires the previous suggestion.
+    if (this.recognitionChoice) {
+      this.recognitionChoice = null;
+      this.notify();
+    }
     this.activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
     // A second finger turns the gesture into pinch-zoom/pan.
@@ -658,7 +694,7 @@ export class App {
           : getSelectionBounds(selected)!;
       const angle = selected.length === 1 ? selected[0].angle : 0;
       const handles = getTransformHandles(bounds, angle, this.state.zoom);
-      const handle = getHandleAtPosition(handles, scene, this.state.zoom);
+      const handle = getHandleAtPosition(handles, scene, this.state.zoom, this.handleHitRadius);
       if (handle) {
         const originals = this.snapshot(selected);
         if (handle.type === "rotation") {
@@ -878,7 +914,15 @@ export class App {
    * Pointer: move
    * ---------------------------------------------------------------- */
 
+  private trackPointerPrecision(event: PointerEvent): void {
+    this.handleHitRadius =
+      event.pointerType === "touch" || event.pointerType === "pen"
+        ? HANDLE_HIT_RADIUS_COARSE
+        : HANDLE_HIT_RADIUS;
+  }
+
   private handlePointerMove = (event: PointerEvent): void => {
+    this.trackPointerPrecision(event);
     if (this.activePointers.has(event.pointerId)) {
       this.activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     }
@@ -986,10 +1030,14 @@ export class App {
         this.scheduleRender();
       }
       this.updateResizeCursor(scene);
-    } else if (this.hoveredElementId) {
-      this.hoveredElementId = null;
-      this.scheduleRender();
+    } else {
+      if (this.hoveredElementId) {
+        this.hoveredElementId = null;
+        this.scheduleRender();
+      }
+      this.cursorOverride = null;
     }
+    this.updateCursor();
   };
 
   private updateResizeCursor(scene: Point): void {
@@ -1010,6 +1058,7 @@ export class App {
       getTransformHandles(bounds, angle, this.state.zoom),
       scene,
       this.state.zoom,
+      this.handleHitRadius,
     );
     if (handle) {
       this.cursorOverride = getResizeCursor(handle.type, angle);
@@ -1360,12 +1409,106 @@ export class App {
         if (replacement) {
           this.elements = this.elements.map((item) => (item.id === element.id ? replacement : item));
           this.afterCreate(replacement, false);
+          this.openRecognitionChoice(element, absolute, replacement);
           return;
         }
       }
+      this.afterCreate(element, false);
+      // Nothing scored well enough, so the stroke stayed freehand. Offer the
+      // shapes it *could* have been rather than leaving the user to redraw.
+      this.openRecognitionChoice(element, absolute, element);
+      return;
     }
 
     this.afterCreate(element, false);
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Recognition choice
+   *
+   * Shape assist has to guess, and a guess the user cannot correct is worse
+   * than no guess. After every recognised stroke we keep the original freehand
+   * points and the fitted frame around, so the alternates are one click away
+   * until the next action. Nothing here mutates history on its own — picking an
+   * option is a normal commit, so undo still walks back through it.
+   * ---------------------------------------------------------------- */
+
+  recognitionChoice: RecognitionChoice | null = null;
+
+  private openRecognitionChoice(
+    original: FreedrawElement,
+    absolute: Pt[],
+    applied: AxElement,
+  ): void {
+    const frame = recognizeFrame(absolute);
+    if (!frame) {
+      // An open stroke (line, arrow) or something too small to reframe. The
+      // alternates below are all closed shapes, so there is nothing to offer.
+      this.recognitionChoice = null;
+      this.notify();
+      return;
+    }
+
+    const options: RecognitionChoiceOption[] = [
+      { type: "rectangle", label: "사각형" },
+      { type: "ellipse", label: "타원" },
+      { type: "diamond", label: "마름모" },
+      { type: "freedraw", label: "손그림" },
+    ];
+
+    this.recognitionChoice = {
+      elementId: applied.id,
+      original,
+      frame,
+      options,
+      active: applied.type === "freedraw" ? "freedraw" : (applied.type as RecognitionChoiceType),
+    };
+    this.notify();
+  }
+
+  /** Swap the recognised element for a different reading of the same stroke. */
+  applyRecognitionChoice(type: RecognitionChoiceType): void {
+    const choice = this.recognitionChoice;
+    if (!choice || choice.active === type) return;
+
+    const current = this.elements.find((item) => item.id === choice.elementId);
+    if (!current) {
+      this.recognitionChoice = null;
+      this.notify();
+      return;
+    }
+
+    const replacement =
+      type === "freedraw"
+        ? { ...choice.original, id: choice.elementId }
+        : this.buildRecognizedElement({
+            type,
+            cx: choice.frame.cx,
+            cy: choice.frame.cy,
+            width: choice.frame.width,
+            height: choice.frame.height,
+            angle: choice.frame.angle,
+          });
+    if (!replacement) return;
+
+    replacement.id = choice.elementId;
+    // History dedupes on id:version, and a rebuilt element starts back at 1.
+    // Without this, swapping between two alternates looks like no change at all
+    // and undo skips straight past it.
+    replacement.version = current.version + 1;
+    this.elements = this.elements.map((item) =>
+      item.id === choice.elementId ? replacement : item,
+    );
+    this.state.selectedIds = new Set([choice.elementId]);
+    this.recognitionChoice = { ...choice, active: type };
+    clearShapeCache();
+    this.commit();
+  }
+
+  dismissRecognitionChoice(): void {
+    if (!this.recognitionChoice) return;
+    this.recognitionChoice = null;
+    this.notify();
   }
 
   /** Convert a recognizer result into a real element with the current style. */
@@ -1637,6 +1780,14 @@ export class App {
     this.shiftKey = event.shiftKey;
     this.altKey = event.altKey;
     const mod = event.ctrlKey || event.metaKey;
+
+    // The palette is chrome, so the UI layer owns it; the app just routes the
+    // chord, which has to be caught before any single-key tool shortcut.
+    if (mod && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      this.onToggleCommandPalette?.();
+      return;
+    }
     const key = event.key;
 
     if (key === " ") {
@@ -1647,7 +1798,11 @@ export class App {
     }
 
     if (key === "Escape") {
-      if (this.multiPointElement) {
+      if (this.recognitionChoice) {
+        // Dismiss the suggestion first — it is the most recent thing on screen,
+        // so it is what Escape should retract.
+        this.dismissRecognitionChoice();
+      } else if (this.multiPointElement) {
         this.finishMultiPoint();
       } else if (this.editingLinearId) {
         this.editingLinearId = null;

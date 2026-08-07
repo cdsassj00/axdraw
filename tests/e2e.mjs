@@ -353,6 +353,203 @@ try {
   });
   check("object snapping aligns edges", snapped.a === snapped.b, JSON.stringify(snapped));
 
+  /* ---------------- command palette ---------------- */
+
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([320, 260], [520, 400]);
+  await page.keyboard.press("v");
+  await page.mouse.click(320, 260);
+
+  // Wait on the palette actually being open rather than a fixed delay: if the
+  // next keystrokes land while it is still closed they hit the canvas as tool
+  // shortcuts, which corrupts every test after this one.
+  const openPalette = async () => {
+    await page.keyboard.press("Control+k");
+    await page.waitForFunction(
+      () => {
+        const backdrop = document.querySelector(".cp-backdrop");
+        return !!backdrop && !backdrop.hidden && document.activeElement?.classList.contains("cp-input");
+      },
+      { timeout: 5000 },
+    );
+  };
+  const closedPalette = () =>
+    page.waitForFunction(
+      () => {
+        const backdrop = document.querySelector(".cp-backdrop");
+        return !backdrop || backdrop.hidden;
+      },
+      { timeout: 5000 },
+    );
+
+  await openPalette();
+  const paletteOpen = await page.evaluate(() => document.querySelectorAll(".cp-row").length > 0);
+  check("Ctrl+K opens the command palette", paletteOpen);
+
+  await page.keyboard.type("png");
+  await page.waitForTimeout(120);
+  const pngResults = await page.evaluate(() =>
+    [...document.querySelectorAll(".cp-row .cp-label")].map((node) => node.textContent),
+  );
+  check(
+    "the palette filters as you type",
+    pngResults.length === 1 && pngResults[0].includes("PNG"),
+    JSON.stringify(pngResults),
+  );
+
+  // Korean and English labels both match, so either language finds the row.
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("마름모");
+  await page.waitForTimeout(120);
+  const koResults = await page.evaluate(() =>
+    [...document.querySelectorAll(".cp-row .cp-label")].map((node) => node.textContent),
+  );
+  check("the palette matches Korean labels", koResults.includes("마름모"), JSON.stringify(koResults));
+
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("dark");
+  await page.waitForTimeout(120);
+  await page.keyboard.press("Enter");
+  await closedPalette();
+  const afterEnter = await page.evaluate(() => document.documentElement.dataset.theme);
+  check("Enter runs the highlighted command and closes", afterEnter === "dark", String(afterEnter));
+
+  await page.evaluate(() => window.axdraw.setTheme("light"));
+
+  // Reopening after running a command only works if focus went back to the
+  // canvas. While the dismissed input still holds focus the app treats every
+  // keystroke as typing and no shortcut fires at all.
+  await openPalette();
+  await page.keyboard.press("Escape");
+  await closedPalette();
+  const focusReturned = await page.evaluate(
+    () => !document.activeElement?.classList.contains("cp-input"),
+  );
+  check("closing the palette returns focus to the canvas", focusReturned);
+
+  await page.keyboard.press("o");
+  const toolAfterClose = await page.evaluate(() => window.axdraw.state.tool);
+  check("shortcuts still work after using the palette", toolAfterClose === "ellipse", toolAfterClose);
+
+  /* ---------------- recognition chip ---------------- */
+
+  await resetView();
+  await page.keyboard.press("p");
+  {
+    const cx = 420;
+    const cy = 330;
+    const r = 95;
+    await page.mouse.move(cx + r, cy);
+    await page.mouse.down();
+    for (let a = 0; a <= Math.PI * 2 + 0.15; a += 0.14) {
+      const w = r + Math.sin(a * 5) * 4;
+      await page.mouse.move(cx + Math.cos(a) * w, cy + Math.sin(a) * w * 0.92);
+    }
+    await page.mouse.up();
+  }
+  await page.waitForTimeout(250);
+
+  const chipState = () =>
+    page.evaluate(() => {
+      const chip = document.querySelector(".ax-recognition-chip");
+      const element = window.axdraw.elements.filter((item) => !item.isDeleted).at(-1);
+      return {
+        visible: !!chip && !chip.hidden,
+        active: chip?.querySelector(".chip-option.active")?.textContent ?? null,
+        type: element?.type,
+      };
+    });
+
+  const afterSketch = await chipState();
+  check(
+    "a recognised stroke offers alternates",
+    afterSketch.visible && afterSketch.type === "ellipse",
+    JSON.stringify(afterSketch),
+  );
+
+  await page.click(".ax-recognition-chip .chip-option:nth-child(3)");
+  await page.waitForTimeout(150);
+  const asDiamond = await chipState();
+  check(
+    "picking an alternate reshapes the element",
+    asDiamond.type === "diamond" && asDiamond.active === "마름모",
+    JSON.stringify(asDiamond),
+  );
+
+  await page.click(".ax-recognition-chip .chip-option:nth-child(4)");
+  await page.waitForTimeout(150);
+  const asFreehand = await chipState();
+  check(
+    "the original freehand stroke stays reachable",
+    asFreehand.type === "freedraw",
+    JSON.stringify(asFreehand),
+  );
+
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(150);
+  const afterUndo = await page.evaluate(
+    () => window.axdraw.elements.filter((item) => !item.isDeleted).at(-1)?.type,
+  );
+  check("undo walks back through the choices", afterUndo === "diamond", String(afterUndo));
+
+  await page.mouse.click(820, 620);
+  await page.waitForTimeout(150);
+  const dismissed = await page.evaluate(() => {
+    const chip = document.querySelector(".ax-recognition-chip");
+    return !chip || chip.hidden;
+  });
+  check("the next canvas action dismisses the chip", dismissed);
+
+  /* ---------------- resize cursors ---------------- */
+
+  // Regression: the cursor was computed on hover but only written to the DOM
+  // during a render. Approaching a handle across empty canvas schedules no
+  // render, so the resize cursor never appeared. Each case below parks the
+  // pointer far away first, so the only thing that can set the cursor is the
+  // move onto the handle itself.
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([300, 250], [500, 400]);
+  await page.keyboard.press("v");
+  await page.mouse.click(300, 250);
+
+  const cursorAt = async (x, y) => {
+    await page.mouse.move(760, 640);
+    await page.mouse.move(x, y, { steps: 3 });
+    await page.waitForTimeout(60);
+    return page.evaluate(() => document.getElementById("root").style.cursor);
+  };
+
+  const handleCursors = [
+    ["nw", 300, 250, "nwse-resize"],
+    ["ne", 500, 250, "nesw-resize"],
+    ["sw", 300, 400, "nesw-resize"],
+    ["se", 500, 400, "nwse-resize"],
+    ["n", 400, 250, "ns-resize"],
+    ["s", 400, 400, "ns-resize"],
+    ["w", 300, 325, "ew-resize"],
+    ["e", 500, 325, "ew-resize"],
+  ];
+  const wrongCursors = [];
+  for (const [name, x, y, want] of handleCursors) {
+    const got = await cursorAt(x, y);
+    if (got !== want) wrongCursors.push(`${name}: ${got} != ${want}`);
+  }
+  check(
+    "every transform handle shows its resize cursor",
+    wrongCursors.length === 0,
+    wrongCursors.join(", ") || `${handleCursors.length} handles`,
+  );
+
+  // The grab area has to be wider than the drawn handle, or the cursor only
+  // appears when the pointer is dead centre on an 8px square.
+  const nearMiss = await cursorAt(510, 410);
+  check("the handle grab area extends past the drawn handle", nearMiss === "nwse-resize", nearMiss);
+
+  const offHandle = await cursorAt(560, 460);
+  check("the resize cursor clears away from the handle", offHandle !== "nwse-resize", offHandle);
+
   /* ---------------- view options ---------------- */
 
   await page.keyboard.press("Control+'");
