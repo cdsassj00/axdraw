@@ -353,6 +353,85 @@ try {
   });
   check("object snapping aligns edges", snapped.a === snapped.b, JSON.stringify(snapped));
 
+  /* ---------------- command palette ---------------- */
+
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([320, 260], [520, 400]);
+  await page.keyboard.press("v");
+  await page.mouse.click(320, 260);
+
+  // Wait on the palette actually being open rather than a fixed delay: if the
+  // next keystrokes land while it is still closed they hit the canvas as tool
+  // shortcuts, which corrupts every test after this one.
+  const openPalette = async () => {
+    await page.keyboard.press("Control+k");
+    await page.waitForFunction(
+      () => {
+        const backdrop = document.querySelector(".cp-backdrop");
+        return !!backdrop && !backdrop.hidden && document.activeElement?.classList.contains("cp-input");
+      },
+      { timeout: 5000 },
+    );
+  };
+  const closedPalette = () =>
+    page.waitForFunction(
+      () => {
+        const backdrop = document.querySelector(".cp-backdrop");
+        return !backdrop || backdrop.hidden;
+      },
+      { timeout: 5000 },
+    );
+
+  await openPalette();
+  const paletteOpen = await page.evaluate(() => document.querySelectorAll(".cp-row").length > 0);
+  check("Ctrl+K opens the command palette", paletteOpen);
+
+  await page.keyboard.type("png");
+  await page.waitForTimeout(120);
+  const pngResults = await page.evaluate(() =>
+    [...document.querySelectorAll(".cp-row .cp-label")].map((node) => node.textContent),
+  );
+  check(
+    "the palette filters as you type",
+    pngResults.length === 1 && pngResults[0].includes("PNG"),
+    JSON.stringify(pngResults),
+  );
+
+  // Korean and English labels both match, so either language finds the row.
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("마름모");
+  await page.waitForTimeout(120);
+  const koResults = await page.evaluate(() =>
+    [...document.querySelectorAll(".cp-row .cp-label")].map((node) => node.textContent),
+  );
+  check("the palette matches Korean labels", koResults.includes("마름모"), JSON.stringify(koResults));
+
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("dark");
+  await page.waitForTimeout(120);
+  await page.keyboard.press("Enter");
+  await closedPalette();
+  const afterEnter = await page.evaluate(() => document.documentElement.dataset.theme);
+  check("Enter runs the highlighted command and closes", afterEnter === "dark", String(afterEnter));
+
+  await page.evaluate(() => window.axdraw.setTheme("light"));
+
+  // Reopening after running a command only works if focus went back to the
+  // canvas. While the dismissed input still holds focus the app treats every
+  // keystroke as typing and no shortcut fires at all.
+  await openPalette();
+  await page.keyboard.press("Escape");
+  await closedPalette();
+  const focusReturned = await page.evaluate(
+    () => !document.activeElement?.classList.contains("cp-input"),
+  );
+  check("closing the palette returns focus to the canvas", focusReturned);
+
+  await page.keyboard.press("o");
+  const toolAfterClose = await page.evaluate(() => window.axdraw.state.tool);
+  check("shortcuts still work after using the palette", toolAfterClose === "ellipse", toolAfterClose);
+
   /* ---------------- recognition chip ---------------- */
 
   await resetView();

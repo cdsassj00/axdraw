@@ -214,7 +214,7 @@ export class App {
       scrollY: 0,
       zoom: 1,
       theme: "light",
-      viewBackgroundColor: "#ffffff",
+      viewBackgroundColor: CANVAS_BACKGROUND_BY_THEME.light,
       gridEnabled: false,
       gridSize: DEFAULT_GRID_SIZE,
       snapEnabled: true,
@@ -231,6 +231,11 @@ export class App {
     this.staticCanvas.className = "ax-canvas ax-canvas--static";
     this.interactiveCanvas = document.createElement("canvas");
     this.interactiveCanvas.className = "ax-canvas ax-canvas--interactive";
+    // Focusable so UI layers can hand focus back to the canvas. Without this,
+    // focus stays on whatever input was just dismissed and the keyboard
+    // handler treats every following keystroke as typing.
+    if (!container.hasAttribute("tabindex")) container.tabIndex = -1;
+
     this.overlay = document.createElement("div");
     this.overlay.className = "ax-overlay";
 
@@ -548,6 +553,8 @@ export class App {
   /** Set by the UI so right-click can open the menu. */
   onContextMenu: ((point: Point, clientX: number, clientY: number) => void) | null = null;
   onError: ((message: string) => void) | null = null;
+  /** Set by the UI layer; toggles the command palette. */
+  onToggleCommandPalette: (() => void) | null = null;
 
   private handleContextMenu = (event: MouseEvent): void => {
     event.preventDefault();
@@ -1773,6 +1780,14 @@ export class App {
     this.shiftKey = event.shiftKey;
     this.altKey = event.altKey;
     const mod = event.ctrlKey || event.metaKey;
+
+    // The palette is chrome, so the UI layer owns it; the app just routes the
+    // chord, which has to be caught before any single-key tool shortcut.
+    if (mod && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      this.onToggleCommandPalette?.();
+      return;
+    }
     const key = event.key;
 
     if (key === " ") {

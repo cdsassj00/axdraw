@@ -14,7 +14,7 @@ export const STROKE_COLORS = ["#1e1e1e", "#e03131", "#2f9e44", "#1971c2", "#f08c
 
 export const BACKGROUND_COLORS = ["transparent", "#ffc9c9", "#b2f2bb", "#a5d8ff", "#ffec99"];
 
-export const CANVAS_COLORS = ["#ffffff", "#f8f9fa", "#f5faff", "#fffce8", "#fdf8f6"];
+export const CANVAS_COLORS = ["#faf7f2", "#ffffff", "#f8f9fa", "#f5faff", "#fffce8"];
 
 /** Full picker palette: 15 hues × 5 shades, plus greys. */
 export const EXTENDED_PALETTE: Record<string, string[]> = {
@@ -115,7 +115,12 @@ export const EXPORT_PADDING = 10;
 
 export const THEME_FILTER = "invert(93%) hue-rotate(180deg)";
 
+/**
+ * The canvas ground. Warm off-white rather than pure white: the strokes are
+ * sketchy and the type is handwriting, and both sit better on paper than on a
+ * lightbox. Pure white is still one click away in the canvas colour picker.
+ */
 export const CANVAS_BACKGROUND_BY_THEME: Record<Theme, string> = {
-  light: "#ffffff",
-  dark: "#121212",
+  light: "#faf7f2",
+  dark: "#1a1715",
 };
