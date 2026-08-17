@@ -8,7 +8,7 @@
  */
 
 import { THEME_FILTER } from "../constants";
-import { getElementCenter } from "../element/bounds";
+import { getElementBounds, getElementCenter } from "../element/bounds";
 import { getElementShape, getFreedrawStroke } from "../element/shapes";
 import { getFontString } from "../element/text";
 import { draw as drawRough } from "../rough/render";
@@ -242,8 +242,18 @@ export function renderStaticScene(
     target.fillRect(0, 0, canvas.width, canvas.height);
     applyViewport(target, config);
     if (config.gridEnabled) drawGrid(target, config);
+    // Viewport culling: with thousands of elements, painting only what is on
+    // screen is the difference between a laggy canvas and a smooth one. The
+    // margin absorbs the sketchy renderer's overshoot past exact bounds.
+    const margin = 100;
+    const left = -config.scrollX - margin;
+    const top = -config.scrollY - margin;
+    const right = -config.scrollX + config.width / config.zoom + margin;
+    const bottom = -config.scrollY + config.height / config.zoom + margin;
     for (const element of elements) {
       if (element.isDeleted) continue;
+      const bounds = getElementBounds(element);
+      if (bounds.x2 < left || bounds.x1 > right || bounds.y2 < top || bounds.y1 > bottom) continue;
       renderElement(target, element, files, config.onImageLoad);
     }
   };

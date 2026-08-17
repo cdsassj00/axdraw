@@ -73,6 +73,7 @@ export function createUI(app: App): void {
   });
 
   app.onError = (message) => showToast(root, message);
+  app.onMessage = (message) => showToast(root, message);
   app.onContextMenu = (_, clientX, clientY) => openContextMenu(app, root, clientX, clientY, render);
 
   /* ---------------------------------------------------------------- *
@@ -676,6 +677,13 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
     menuItem("download", "Save to file", "Ctrl+S", run(() => app.saveToFile())),
     menuItem("image", "Export image…", "Ctrl+E", run(() => openExportDialog(app))),
     menuItem("copy", "Copy canvas to clipboard", null, run(() => void app.copyPngToClipboard())),
+    menuItem("link", "Share link…", null, run(() => void app.shareLink())),
+    menuItem(
+      "users",
+      app.collab ? "Stop live collaboration" : "Live collaboration…",
+      null,
+      run(() => (app.collab ? app.stopCollab() : void app.startCollab())),
+    ),
     h("div", { class: "dropdown-separator" }),
     menuItem("grid", `Grid: ${app.state.gridEnabled ? "on" : "off"}`, "Ctrl+'", run(() => app.toggleGrid())),
     menuItem("selection", `Object snapping: ${app.state.snapEnabled ? "on" : "off"}`, null, run(() => {

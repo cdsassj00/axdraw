@@ -122,6 +122,8 @@ import {
 } from "./scene/interactive";
 import { renderStaticScene, screenToScene, type Viewport } from "./scene/renderer";
 import { clearStoredScene, loadScene, saveScene } from "./scene/storage";
+import { createShareLink, loadSharedScene } from "./scene/share";
+import { CollabSession, ROOM_HASH_PATTERN } from "./scene/collab";
 import type {
   AppState,
   AxElement,
@@ -290,6 +292,7 @@ export class App {
 
   /** Record a history step, persist, re-render and refresh the UI. */
   commit(): void {
+    this.collab?.queueBroadcast();
     this.history.record(this.elements, this.state.selectedIds);
     this.scheduleRender();
     this.schedulePersist();
@@ -553,6 +556,7 @@ export class App {
   /** Set by the UI so right-click can open the menu. */
   onContextMenu: ((point: Point, clientX: number, clientY: number) => void) | null = null;
   onError: ((message: string) => void) | null = null;
+  onMessage: ((message: string) => void) | null = null;
   /** Set by the UI layer; toggles the command palette. */
   onToggleCommandPalette: (() => void) | null = null;
 
@@ -2475,6 +2479,111 @@ export class App {
   saveToFile(): void {
     const json = serializeScene(this.elements, this.files, this.state);
     downloadBlob(new Blob([json], { type: "application/json" }), `drawing${FILE_EXTENSION}`);
+  }
+
+  /** Uploads the encrypted scene and puts a share URL on the clipboard. */
+  async shareLink(): Promise<void> {
+    if (!this.elements.some((element) => !element.isDeleted)) {
+      this.onError?.("Nothing to share");
+      return;
+    }
+    try {
+      const url = await createShareLink(this.elements, this.files, this.state);
+      await navigator.clipboard.writeText(url);
+      this.onMessage?.("Share link copied to clipboard");
+    } catch (error) {
+      this.onError?.(error instanceof Error ? error.message : "Sharing failed");
+    }
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Live collaboration
+   * ---------------------------------------------------------------- */
+
+  collab: CollabSession | null = null;
+
+  /** Starts a room (or re-copies the link of the current one). */
+  async startCollab(): Promise<void> {
+    try {
+      if (!this.collab) {
+        this.collab = await CollabSession.create(this);
+      }
+      await navigator.clipboard.writeText(this.collab.url);
+      this.onMessage?.("Collaboration link copied — anyone with it can draw with you");
+    } catch (error) {
+      this.onError?.(error instanceof Error ? error.message : "Could not start collaboration");
+    }
+  }
+
+  stopCollab(): void {
+    this.collab?.destroy();
+    this.collab = null;
+    this.onMessage?.("Left the collaboration room");
+  }
+
+  /** Joins a room when the page was opened through a #room=… link. */
+  async joinCollabFromHash(): Promise<void> {
+    const match = ROOM_HASH_PATTERN.exec(location.hash);
+    if (!match || this.collab) return;
+    try {
+      this.collab = await CollabSession.join(this, match[1], match[2]);
+      this.onMessage?.("Joined the collaboration room");
+    } catch (error) {
+      this.onError?.(error instanceof Error ? error.message : "Could not join the room");
+    }
+  }
+
+  /**
+   * Merges a collaborator's scene: element-wise last-writer-wins on
+   * (version, updated). Deliberately does not touch local undo history and
+   * does not re-commit — the sender already owns that change.
+   */
+  applyRemoteScene(remote: readonly AxElement[], files: BinaryFiles): void {
+    const merged = new Map<string, AxElement>();
+    for (const element of this.elements) merged.set(element.id, element);
+    for (const element of remote) {
+      const local = merged.get(element.id);
+      if (
+        !local ||
+        element.version > local.version ||
+        (element.version === local.version && element.updated > local.updated)
+      ) {
+        merged.set(element.id, element);
+      }
+    }
+    this.elements = [...merged.values()];
+    Object.assign(this.files, files);
+    this.state.selectedIds = new Set(
+      [...this.state.selectedIds].filter((id) => {
+        const element = merged.get(id);
+        return element && !element.isDeleted;
+      }),
+    );
+    this.scheduleRender();
+    this.schedulePersist();
+    this.notify();
+  }
+
+  /** Replaces the canvas with a scene fetched from a share link, if present. */
+  async loadFromShareLink(): Promise<void> {
+    try {
+      const scene = await loadSharedScene();
+      if (!scene) return;
+      this.elements = scene.elements;
+      this.files = scene.files;
+      this.state.selectedIds = new Set();
+      if (scene.appState.viewBackgroundColor) {
+        this.state.viewBackgroundColor = scene.appState.viewBackgroundColor;
+      }
+      clearShapeCache();
+      clearImageCache();
+      this.history.reset(this.elements, this.state.selectedIds);
+      this.zoomToFit();
+      this.commit();
+      this.onMessage?.("Opened a shared drawing");
+    } catch (error) {
+      this.onError?.(error instanceof Error ? error.message : "Could not load the shared scene");
+    }
   }
 
   async openFile(): Promise<void> {

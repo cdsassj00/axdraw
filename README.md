@@ -81,6 +81,12 @@ npm run test:e2e # 브라우저 자동화 테스트 31개
 
 **입력** — 마우스, 펜(필압 반영), 터치(그리기 + 두 손가락 확대/이동) 모두 지원.
 
+**클라우드 공유 (무료)** — Excalidraw는 클라우드 저장·공유가 유료(Excalidraw+)지만, axdraw는 메뉴 → "Share link…" (또는 `Ctrl+K` → 공유 링크) 한 번으로 공유 URL이 클립보드에 복사됩니다. 장면은 **브라우저에서 AES-GCM으로 암호화한 뒤** Cloudflare Workers KV에 올라가고, 복호화 키는 URL의 `#` 프래그먼트에만 있어서 서버로 전송되지 않습니다. 서버는 자기가 저장한 내용을 읽을 수 없습니다. 링크를 열면 그 장면이 바로 캔버스에 로드됩니다.
+
+**실시간 협업 (무료)** — 메뉴 → "Live collaboration…" (또는 `Ctrl+K` → 실시간 협업 시작)을 누르면 방 링크가 클립보드에 복사되고, 링크를 연 사람은 즉시 같은 캔버스에서 함께 그립니다. 상대의 커서가 색깔 점으로 보입니다. 서버는 Cloudflare **Durable Object 하나가 암호화된 WebSocket 프레임을 중계**할 뿐이고, 공유 링크와 같은 방식으로 방 키가 URL 프래그먼트에만 있어서 서버는 내용을 읽을 수 없습니다. 동기화는 요소 단위 last-writer-wins(버전 비교)로 수렴합니다.
+
+**성능** — 화면 밖 요소는 그리지 않는 뷰포트 컬링이 들어 있어, 수천 개 요소가 있는 큰 보드에서도 팬·줌이 화면에 보이는 만큼만 비쌉니다. (요소별 손그림 기하 캐시, 프레임당 1회 다크모드 합성과 함께 Excalidraw의 "큰 보드에서 버벅인다"는 불만 지점을 겨냥한 것.) 붙여넣은 이미지는 원본 해상도의 dataURL을 그대로 보관하므로 화질이 깎이지 않습니다.
+
 ---
 
 ## 단축키
@@ -119,7 +125,30 @@ public/fonts/     번들된 손글씨 웹폰트 (Caveat + Gaegu, OFL)
 
 ## 배포
 
-정적 파일이라 아무 곳에나 올리면 됩니다.
+### Cloudflare (권장 — 공유 서버 포함)
+
+Worker 하나가 정적 앱(`dist/`)과 공유 API를 함께 서빙합니다. 최초 1회 설정 후에는 `npm run deploy` 한 번이면 됩니다.
+
+```bash
+npx wrangler login
+npm run deploy      # 빌드 + https://axdraw.<계정>.workers.dev 배포
+```
+
+(KV 네임스페이스는 이미 생성되어 `wrangler.toml`에 들어 있습니다.)
+
+**자동 배포**: 저장소 Settings → Secrets → Actions에 `CLOUDFLARE_API_TOKEN`(대시보드 → API Tokens → "Edit Cloudflare Workers" 템플릿 + Workers KV Storage: Edit)을 등록하면, 이후 기본 브랜치에 푸시할 때마다 `.github/workflows/deploy-cloudflare.yml`이 알아서 배포합니다. 시크릿이 없으면 워크플로는 조용히 건너뜁니다.
+
+Workers 무료 플랜(일 10만 요청, KV 1GB, Durable Objects 포함)으로 충분합니다. 서버 코드는 `worker/index.js` 하나가 전부입니다 — KV 공유 저장 + 협업 방(Durable Object) 중계.
+
+GitHub Pages 같은 정적 호스팅에 앱을 두고 공유 API만 Worker를 쓰려면 빌드할 때 주소를 지정합니다:
+
+```bash
+VITE_SHARE_API=https://axdraw.<계정>.workers.dev npm run build
+```
+
+### 정적 호스팅
+
+정적 파일이라 아무 곳에나 올리면 됩니다. (공유 기능만 위의 Worker가 필요합니다.)
 
 ```bash
 npm run build              # dist/
@@ -138,7 +167,7 @@ VITE_BASE=/axdraw/ npm run build   # 하위 경로로 서비스할 때
 
 Excalidraw 코드를 가져오지 않고 처음부터 새로 구현했습니다. 파일 형식과 조작 방식은 익숙하게 쓸 수 있도록 호환을 맞췄고(`.excalidraw` 파일 열기, 같은 단축키), 손그림 렌더링은 rough.js가 쓰는 것과 같은 방식의 알고리즘을 직접 구현했습니다. 도형 자동 인식은 Excalidraw에 없는 기능입니다.
 
-아직 없는 것: 실시간 공동 편집, 도형 라이브러리, 엘보 화살표 자동 경로, 멘탈 모델 상 프레임 기능은 기본 수준(프레임 이동 시 내부 요소 함께 이동)까지만 구현했습니다.
+아직 없는 것: 도형 라이브러리, 엘보 화살표 자동 경로, 멘탈 모델 상 프레임 기능은 기본 수준(프레임 이동 시 내부 요소 함께 이동)까지만 구현했습니다. (실시간 공동 편집은 Durable Object 기반으로 들어 있습니다 — 위 참조.)
 
 ---
 

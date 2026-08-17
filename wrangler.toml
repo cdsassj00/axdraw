@@ -1,0 +1,28 @@
+# Cloudflare deployment: the Worker serves both the built app (dist/) and the
+# share API. The KV namespace below already exists; deploying is:
+#
+#   npx wrangler login
+#   npm run deploy
+#
+name = "axdraw"
+main = "worker/index.js"
+compatibility_date = "2026-08-01"
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[[kv_namespaces]]
+binding = "SCENES"
+id = "261bee1a18784ee881e372399b7408eb"
+
+# Live-collaboration rooms. No extra setup — the migration below creates the
+# class on first deploy.
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
