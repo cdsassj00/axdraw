@@ -103,6 +103,7 @@ import {
   wrapText,
 } from "./element/text";
 import { History } from "./history";
+import { FILE_CARD_HEIGHT, FILE_CARD_WIDTH } from "./element/filecard";
 import { clearShapeCache } from "./element/shapes";
 import {
   downloadBlob,
@@ -138,6 +139,7 @@ import { t } from "./i18n";
 import type {
   AppState,
   AxElement,
+  BinaryFile,
   BinaryFiles,
   FreedrawElement,
   ItemStyle,
@@ -151,6 +153,9 @@ import type {
 } from "./types";
 import { TextEditor } from "./ui/textEditor";
 import { randomId } from "./utils/random";
+
+/** Attachments live in localStorage alongside the scene, so keep them modest. */
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
 type PointerMode =
   | { type: "none" }
@@ -1752,6 +1757,10 @@ export class App {
     const hit = getElementAtPosition(this.elements, scene, threshold);
 
     if (hit) {
+      if (this.attachmentFor(hit)) {
+        this.downloadAttachment(hit);
+        return;
+      }
       if (hit.type === "text") {
         const container = hit.containerId
           ? this.elements.find((item) => item.id === hit.containerId) ?? null
@@ -2109,6 +2118,14 @@ export class App {
           return;
         }
       }
+      if (item.kind === "file") {
+        const file = item.getAsFile();
+        if (file) {
+          event.preventDefault();
+          void this.addFileCard(file, this.lastPointerScene);
+          return;
+        }
+      }
     }
 
     const text = event.clipboardData?.getData("text/plain") ?? "";
@@ -2218,11 +2235,17 @@ export class App {
     const files = event.dataTransfer?.files;
     if (!files?.length) return;
     const scene = this.clientToScene(event.clientX, event.clientY);
-    const file = files[0];
-    if (file.type.startsWith("image/")) {
-      void this.addImage(file, scene);
-    } else if (file.name.endsWith(FILE_EXTENSION) || file.name.endsWith(".excalidraw") || file.type === "application/json") {
-      void this.loadFromFile(file);
+    let offset = 0;
+    for (const file of files) {
+      if (file.type.startsWith("image/")) {
+        void this.addImage(file, { x: scene.x + offset, y: scene.y + offset });
+      } else if (file.name.endsWith(FILE_EXTENSION) || file.name.endsWith(".excalidraw") || file.type === "application/json") {
+        void this.loadFromFile(file);
+        break;
+      } else {
+        void this.addFileCard(file, { x: scene.x + offset, y: scene.y + offset });
+      }
+      offset += 28;
     }
   };
 
@@ -2269,6 +2292,80 @@ export class App {
       if (file) void this.addImage(file, position);
     };
     input.click();
+  }
+
+  /** Attach any file (PDF, ZIP, …) as a downloadable card on the canvas. */
+  async addFileCard(file: File, position: Point): Promise<void> {
+    try {
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        throw new Error("File is too large to attach (max 8MB)");
+      }
+      const dataURL = await readFileAsDataURL(file);
+      const fileId = randomId();
+      this.files[fileId] = {
+        id: fileId,
+        mimeType: file.type || "application/octet-stream",
+        dataURL,
+        created: Date.now(),
+        name: file.name || "file",
+        size: file.size,
+      };
+      const element = newImageElement({
+        x: position.x - FILE_CARD_WIDTH / 2,
+        y: position.y - FILE_CARD_HEIGHT / 2,
+        width: FILE_CARD_WIDTH,
+        height: FILE_CARD_HEIGHT,
+        style: this.state.currentStyle,
+        fileId,
+      });
+      this.elements = [...this.elements, element];
+      this.state.selectedIds = new Set([element.id]);
+      this.setTool("selection", false);
+      this.commit();
+    } catch (error) {
+      this.onError?.(error instanceof Error ? error.message : "Could not attach the file");
+    }
+  }
+
+  /** Opens a picker for any file type and drops it as a file card. */
+  pickAttachment(): void {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (file) {
+        const rect = this.container.getBoundingClientRect();
+        void this.addFileCard(file, {
+          x: rect.width / 2 / this.state.zoom - this.state.scrollX,
+          y: rect.height / 2 / this.state.zoom - this.state.scrollY,
+        });
+      }
+    };
+    input.click();
+  }
+
+  /** The attachment behind an element, when it is a file card. */
+  attachmentFor(element: AxElement | null | undefined): BinaryFile | null {
+    if (!element || element.type !== "image" || !element.fileId) return null;
+    const file = this.files[element.fileId];
+    return file && !file.mimeType.startsWith("image/") ? file : null;
+  }
+
+  /** Download the file behind a card element (double-click / context menu). */
+  downloadAttachment(element: AxElement): void {
+    const file = this.attachmentFor(element);
+    if (!file) return;
+    void fetch(file.dataURL)
+      .then((response) => response.blob())
+      .then((blob) => downloadBlob(blob, file.name ?? "file"))
+      .catch(() => this.onError?.("Could not download the file"));
+  }
+
+  downloadSelectedAttachment(): void {
+    const selected = this.getSelectedElements();
+    for (const element of selected) {
+      if (this.attachmentFor(element)) this.downloadAttachment(element);
+    }
   }
 
   /* ---------------------------------------------------------------- *

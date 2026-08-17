@@ -8,6 +8,7 @@ import {
   THEME_FILTER,
 } from "../constants";
 import { getCommonBounds } from "../element/bounds";
+import { formatFileSize, middleTruncate } from "../element/filecard";
 import { getDashArray, getElementShape, getFreedrawStroke } from "../element/shapes";
 import { opsToPath } from "../rough/render";
 import type { AppState, AxElement, BinaryFiles, SceneData, TextElement, Theme } from "../types";
@@ -159,7 +160,17 @@ function elementToSvg(element: AxElement, files: BinaryFiles): string {
     case "image": {
       const fileId = (element as { fileId?: string | null }).fileId;
       const file = fileId ? files[fileId] : null;
-      if (file) {
+      if (file && !file.mimeType.startsWith("image/")) {
+        // Attachments export as a flat card; the payload itself is not embeddable.
+        const { x, y, width, height } = element;
+        const name = middleTruncate(file.name ?? "file", 24);
+        const sub = file.size != null ? formatFileSize(file.size) : file.mimeType;
+        parts.push(
+          `<rect x="${x}" y="${y}" width="${width}" height="${height}" rx="${Math.min(12, height / 4)}" fill="#ffffff" stroke="#d8d2c8" stroke-width="1.5"/>`,
+          `<text x="${x + height * 0.9}" y="${y + height * 0.44}" font-family="system-ui, sans-serif" font-size="${Math.max(11, height * 0.21)}px" font-weight="600" fill="#3d3a33">${escapeXml(name)}</text>`,
+          `<text x="${x + height * 0.9}" y="${y + height * 0.72}" font-family="system-ui, sans-serif" font-size="${Math.max(10, height * 0.17)}px" fill="#94908a">${escapeXml(sub)}</text>`,
+        );
+      } else if (file) {
         parts.push(
           `<image x="${element.x}" y="${element.y}" width="${element.width}" height="${element.height}" href="${file.dataURL}" preserveAspectRatio="none"/>`,
         );

@@ -410,7 +410,7 @@ export function createUI(app: App): void {
         section("Line height", [
           h("div", { class: "slider-row" }, [
             h("input", {
-              type: "range", min: "1", max: "2.5", step: "0.05",
+              type: "range", min: "0.7", max: "1.8", step: "0.05",
               value: String(style.lineHeight ?? 1.25),
               onpointerdown: () => { sliderActive = true; },
               oninput: (event: Event) => {
@@ -424,7 +424,7 @@ export function createUI(app: App): void {
         section("Letter spacing", [
           h("div", { class: "slider-row" }, [
             h("input", {
-              type: "range", min: "-1", max: "10", step: "0.5",
+              type: "range", min: "-5", max: "5", step: "0.25",
               value: String(style.letterSpacing ?? 0),
               onpointerdown: () => { sliderActive = true; },
               oninput: (event: Event) => {
@@ -805,6 +805,7 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
     menuItem("duplicate", "Boards…", null, run(() => openBoardsDialog(app))),
     h("div", { class: "dropdown-separator" }),
     menuItem("upload", "Open…", "Ctrl+O", run(() => void app.openFile())),
+    menuItem("upload", "Attach file…", null, run(() => app.pickAttachment())),
     menuItem("download", "Save to file", "Ctrl+S", run(() => app.saveToFile())),
     menuItem("image", "Export image…", "Ctrl+E", run(() => openExportDialog(app))),
     menuItem("copy", "Copy canvas to clipboard", null, run(() => void app.copyPngToClipboard())),
@@ -994,6 +995,12 @@ function openContextMenu(
     if (selected.some((element: AxElement) => element.type === "freedraw")) {
       menu.append(
         menuItem("wand", "Convert to shape", null, run(() => app.convertSelectedFreedraw())),
+        h("div", { class: "dropdown-separator" }),
+      );
+    }
+    if (selected.some((element: AxElement) => app.attachmentFor(element))) {
+      menu.append(
+        menuItem("download", "Download file", null, run(() => app.downloadSelectedAttachment())),
         h("div", { class: "dropdown-separator" }),
       );
     }
