@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>☕ axdraw 개발자에게 커피 한 잔</title>
+  <meta name="robots" content="noindex" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%E2%98%95%3C/text%3E%3C/svg%3E" />
+  <script src="https://js.tosspayments.com/v1/payment"></script>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      font-family: "Pretendard", "Noto Sans KR", -apple-system, sans-serif;
+      color: #1d1d1f; background: #fbfaf8;
+    }
+    @media (prefers-color-scheme: dark) { body { color: #f5f5f7; background: #161618; } .card { background: #1d1d1f; border-color: #3a3a3c; } .amount { border-color: #3a3a3c; color: #f5f5f7; } }
+    .card {
+      width: min(380px, calc(100vw - 40px)); padding: 32px; border-radius: 20px;
+      background: #fff; border: 1px solid #e5e5e5; box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+      text-align: center;
+    }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    p { color: #6e6e73; font-size: 14px; margin: 0 0 22px; line-height: 1.6; }
+    .amounts { display: flex; gap: 8px; margin-bottom: 18px; }
+    .amount {
+      flex: 1; padding: 14px 0; border-radius: 12px; border: 1px solid #e5e5e5;
+      background: transparent; color: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
+    }
+    .amount.on { border-color: #0071e3; background: rgba(0,113,227,0.1); color: #0071e3; }
+    .pay {
+      width: 100%; padding: 15px 0; border: none; border-radius: 999px;
+      background: linear-gradient(90deg, #d4af37, #f5d76e); color: #14120a;
+      font-size: 16px; font-weight: 700; cursor: pointer;
+    }
+    .fail { color: #e03131; font-size: 13px; margin-top: 12px; }
+    a.back { display: inline-block; margin-top: 16px; color: #6e6e73; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>☕ 커피 한 잔 후원</h1>
+    <p>axdraw가 도움이 되었다면,<br />개발자 shinsungjin(CDSA.kr)에게 커피 한 잔!</p>
+    <div class="amounts" id="amounts">
+      <button class="amount" data-v="3000">3,000원</button>
+      <button class="amount on" data-v="5000">5,000원</button>
+      <button class="amount" data-v="10000">10,000원</button>
+    </div>
+    <button class="pay" id="pay">토스로 결제하기</button>
+    <div class="fail" id="fail"></div>
+    <a class="back" href="/">← axdraw로 돌아가기</a>
+  </div>
+  <script>
+    var amount = 5000;
+    document.getElementById("amounts").addEventListener("click", function (e) {
+      var b = e.target.closest(".amount");
+      if (!b) return;
+      amount = Number(b.dataset.v);
+      document.querySelectorAll(".amount").forEach(function (x) { x.classList.toggle("on", x === b); });
+    });
+    var params = new URLSearchParams(location.search);
+    if (params.get("code")) {
+      document.getElementById("fail").textContent = "결제가 완료되지 않았습니다: " + (params.get("message") || params.get("code"));
+    }
+    var toss = TossPayments("live_ck_26DlbXAaV0PYJpAPg0dqVqY50Q9R");
+    document.getElementById("pay").addEventListener("click", function () {
+      toss.requestPayment("카드", {
+        amount: amount,
+        orderId: "coffee_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
+        orderName: "axdraw 커피 후원",
+        successUrl: location.origin + "/coffee-success",
+        failUrl: location.origin + "/coffee",
+      }).catch(function (e) {
+        if (e.code !== "USER_CANCEL") document.getElementById("fail").textContent = e.message || "결제를 시작하지 못했습니다";
+      });
+    });
+  </script>
+</body>
+</html>

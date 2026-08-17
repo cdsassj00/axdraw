@@ -4,8 +4,8 @@ export const APP_NAME = "axdraw";
 /** Maker credit shown in the corner chip. */
 export const CREDIT_LABEL = "made by shinsungjin · CDSA.kr";
 export const CREDIT_URL = "https://cdsa.kr";
-/** Set to a Buy Me a Coffee (or similar) URL to show the ☕ button; empty hides it. */
-export const COFFEE_URL = "";
+/** Sponsorship page (Toss Payments); empty hides the ☕ button. */
+export const COFFEE_URL = "coffee";
 export const FILE_EXTENSION = ".axdraw";
 export const STORAGE_KEY = "axdraw:scene";
 export const STORAGE_STATE_KEY = "axdraw:state";

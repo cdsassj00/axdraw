@@ -87,6 +87,34 @@ export default {
         return new Response(null, { status: 204, headers: CORS_HEADERS });
       }
 
+      // Coffee sponsorship: approve a Toss Payments payment server-side.
+      // The client key opens the payment window; nothing is charged until
+      // this confirm call, made with the secret key that lives only in a
+      // Worker secret (npx wrangler secret put TOSS_SECRET_KEY).
+      if (url.pathname === "/api/coffee/confirm" && request.method === "POST") {
+        if (!env.TOSS_SECRET_KEY) {
+          return json({ error: "TOSS_SECRET_KEY is not configured" }, 501);
+        }
+        const { paymentKey, orderId, amount } = await request.json().catch(() => ({}));
+        const ALLOWED_AMOUNTS = [3000, 5000, 10000];
+        if (!paymentKey || !orderId || !ALLOWED_AMOUNTS.includes(amount)) {
+          return json({ error: "invalid payment parameters" }, 400);
+        }
+        const confirm = await fetch("https://api.tosspayments.com/v1/payments/confirm", {
+          method: "POST",
+          headers: {
+            authorization: `Basic ${btoa(`${env.TOSS_SECRET_KEY}:`)}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ paymentKey, orderId, amount }),
+        });
+        const body = await confirm.text();
+        return new Response(body, {
+          status: confirm.status,
+          headers: { "content-type": "application/json", ...CORS_HEADERS },
+        });
+      }
+
       const room = /^\/api\/rooms\/([A-Za-z0-9]+)\/ws$/.exec(url.pathname);
       if (room) {
         return env.ROOMS.get(env.ROOMS.idFromName(room[1])).fetch(request);

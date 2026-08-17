@@ -138,6 +138,8 @@ npm run deploy      # 빌드 + https://axdraw.<계정>.workers.dev 배포
 
 **자동 배포**: 저장소 Settings → Secrets → Actions에 `CLOUDFLARE_API_TOKEN`(대시보드 → API Tokens → "Edit Cloudflare Workers" 템플릿 + Workers KV Storage: Edit)을 등록하면, 이후 기본 브랜치에 푸시할 때마다 `.github/workflows/deploy-cloudflare.yml`이 알아서 배포합니다. 시크릿이 없으면 워크플로는 조용히 건너뜁니다.
 
+**커피 후원(토스페이먼츠)**: `/coffee` 페이지의 결제는 서버 승인(confirm)이 있어야 완료됩니다. 최초 1회 시크릿 키 등록이 필요합니다 — 로컬에서 `npx wrangler secret put TOSS_SECRET_KEY` 실행 후 `live_sk_…` 값 붙여넣기 (또는 Cloudflare 대시보드 → Workers → axdraw → Settings → Variables → Add secret). 시크릿 키는 코드·채팅에 절대 노출하지 않습니다.
+
 Workers 무료 플랜(일 10만 요청, KV 1GB, Durable Objects 포함)으로 충분합니다. 서버 코드는 `worker/index.js` 하나가 전부입니다 — KV 공유 저장 + 협업 방(Durable Object) 중계.
 
 GitHub Pages 같은 정적 호스팅에 앱을 두고 공유 API만 Worker를 쓰려면 빌드할 때 주소를 지정합니다:
