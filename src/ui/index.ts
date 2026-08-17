@@ -13,11 +13,11 @@ import {
   FONT_SIZES,
   ROUGHNESS,
   STROKE_COLORS,
-  STROKE_WIDTHS,
 } from "../constants";
 import type { Arrowhead, AxElement, FontFamily, ItemStyle, ToolType } from "../types";
 import { openConfirmDialog, openExportDialog, openHelpDialog, showToast } from "./dialogs";
 import { COFFEE_URL, CREDIT_LABEL, CREDIT_URL } from "../constants";
+import { openTemplateDialog } from "./templates";
 import { button, dismissable, h } from "./dom";
 import { iconEl } from "./icons";
 import { createCommandPalette } from "./commandPalette";
@@ -134,7 +134,7 @@ export function createUI(app: App): void {
 
   function renderCorners(): void {
     topLeft.replaceChildren(
-      h("div", { class: "island", style: { padding: "6px" } }, [
+      h("div", { class: "island", style: { display: "flex", alignItems: "center", gap: "4px", padding: "6px" } }, [
         button({
           icon: iconEl("menu"),
           title: "Menu",
@@ -143,10 +143,27 @@ export function createUI(app: App): void {
             openMainMenu(app, root, topLeft, render);
           },
         }),
+        h("span", { class: "brand", text: "axdraw" }),
+      ]),
+      h("div", { class: "island", style: { padding: "6px" } }, [
+        button({
+          icon: iconEl("template"),
+          label: "템플릿",
+          className: "btn--wide",
+          title: "Insert a diagram template",
+          onClick: () => openTemplateDialog(app),
+        }),
       ]),
     );
 
     topRight.replaceChildren(
+      h("button", {
+        class: "primary-btn share-btn",
+        type: "button",
+        text: "공유",
+        title: "Copy an encrypted share link",
+        onclick: () => void app.shareLink(),
+      }),
       h("div", { class: "island", style: { display: "flex", gap: "2px", padding: "6px" } }, [
         button({
           icon: iconEl("wand"),
@@ -252,15 +269,23 @@ export function createUI(app: App): void {
     if (geometry) {
       panel.append(
         section("Stroke width", [
-          optionRow(
-            [
-              { value: String(STROKE_WIDTHS.thin), label: "—", title: "Thin" },
-              { value: String(STROKE_WIDTHS.bold), label: "━", title: "Bold" },
-              { value: String(STROKE_WIDTHS.extraBold), label: "█", title: "Extra bold" },
-            ],
-            String(style.strokeWidth),
-            (value) => app.setStyle({ strokeWidth: Number(value) }),
-          ),
+          h("div", { class: "slider-row" }, [
+            h("input", {
+              type: "range",
+              min: "1",
+              max: "20",
+              step: "1",
+              value: String(style.strokeWidth),
+              onpointerdown: () => {
+                sliderActive = true;
+              },
+              oninput: (event: Event) => {
+                sliderActive = true;
+                app.setStyle({ strokeWidth: Number((event.target as HTMLInputElement).value) });
+              },
+            }),
+            h("span", { text: `${style.strokeWidth}px`, style: { fontSize: "12px", minWidth: "34px" } }),
+          ]),
         ]),
         section("Stroke style", [
           optionRow(

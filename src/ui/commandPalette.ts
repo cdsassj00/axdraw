@@ -90,6 +90,7 @@ export const COMMANDS: Command[] = [
   { id: "file.share", label: "Share link", ko: "공유 링크", group: "파일", run: (a) => void a.shareLink() },
   { id: "collab.start", label: "Start live collaboration", ko: "실시간 협업 시작", group: "파일", run: (a) => void a.startCollab(), enabled: (a) => !a.collab },
   { id: "collab.stop", label: "Stop live collaboration", ko: "실시간 협업 종료", group: "파일", run: (a) => a.stopCollab(), enabled: (a) => !!a.collab },
+  { id: "insert.template", label: "Insert template", ko: "템플릿 삽입", group: "파일", run: (a) => void import("./templates").then((m) => m.openTemplateDialog(a)) },
 ];
 
 /**

@@ -199,16 +199,19 @@ body {
  * Toolbar
  * ------------------------------------------------------------------ */
 
+/* A vertical tool rail on the left, like a design tool — not a top-centre
+   strip. The properties panel lives on the right for the same reason. */
 .toolbar {
   position: absolute;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 50%;
+  left: 12px;
+  transform: translateY(-50%);
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 2px;
-  max-width: calc(100vw - 24px);
-  overflow-x: auto;
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
   scrollbar-width: none;
 }
 
@@ -217,11 +220,28 @@ body {
 }
 
 .toolbar .separator {
-  width: 1px;
-  height: 24px;
-  margin: 0 4px;
+  width: 24px;
+  height: 1px;
+  margin: 4px 0;
   background: var(--separator);
   flex: 0 0 auto;
+}
+
+.brand {
+  padding: 0 10px 0 4px;
+  font-family: "Caveat", cursive;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  user-select: none;
+}
+
+.brand::first-letter {
+  color: var(--accent);
+}
+
+.share-btn {
+  box-shadow: var(--shadow);
 }
 
 .top-left {
@@ -291,8 +311,8 @@ body {
 
 .panel {
   position: absolute;
-  top: 62px;
-  left: 12px;
+  top: 64px;
+  right: 12px;
   width: 208px;
   max-height: calc(100dvh - 150px);
   overflow-y: auto;
@@ -628,6 +648,50 @@ input[type="range"] {
   font-size: 12px;
 }
 
+.tpl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.tpl-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--separator);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, transform 120ms ease;
+}
+
+.tpl-card:hover {
+  background: var(--button-hover);
+}
+
+.tpl-card:active {
+  transform: scale(0.97);
+}
+
+.tpl-emoji {
+  font-size: 26px;
+}
+
+.tpl-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tpl-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .credit {
   display: flex;
   gap: 10px;
@@ -712,7 +776,24 @@ input[type="range"] {
   .toolbar {
     top: auto;
     bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    flex-direction: row;
+    max-height: none;
+    max-width: calc(100vw - 24px);
+    overflow-x: auto;
+    overflow-y: hidden;
     padding: 4px;
+  }
+
+  .toolbar .separator {
+    width: 1px;
+    height: 24px;
+    margin: 0 4px;
+  }
+
+  .brand {
+    display: none;
   }
 
   .top-left,
