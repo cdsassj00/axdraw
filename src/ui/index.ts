@@ -112,7 +112,7 @@ export function createUI(app: App): void {
     coffee.href = COFFEE_URL;
     coffee.target = "_blank";
     coffee.rel = "noopener";
-    coffee.textContent = "☕ Buy me a coffee";
+    coffee.textContent = "☕ 커피 한 잔";
     credit.appendChild(coffee);
   }
   bottomRight.appendChild(credit);

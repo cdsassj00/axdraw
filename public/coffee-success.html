@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>☕ 감사합니다!</title>
+  <meta name="robots" content="noindex" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%E2%9D%A4%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      font-family: "Pretendard", "Noto Sans KR", -apple-system, sans-serif; color: #1d1d1f; background: #fbfaf8; text-align: center; }
+    @media (prefers-color-scheme: dark) { body { color: #f5f5f7; background: #161618; } }
+    h1 { font-size: 26px; margin-bottom: 8px; }
+    p { color: #6e6e73; }
+    a { display: inline-block; margin-top: 18px; padding: 12px 26px; border-radius: 999px; background: #0071e3; color: #fff; text-decoration: none; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div>
+    <h1 id="title">결제 승인 중…</h1>
+    <p id="msg">잠시만 기다려주세요.</p>
+    <a href="/">axdraw로 돌아가기</a>
+  </div>
+  <script>
+    // The redirect from Toss carries paymentKey/orderId/amount; the payment
+    // only completes once our server confirms it with the secret key.
+    var q = new URLSearchParams(location.search);
+    fetch("/api/coffee/confirm", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ paymentKey: q.get("paymentKey"), orderId: q.get("orderId"), amount: Number(q.get("amount")) }),
+    }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (res.ok) {
+          document.getElementById("title").textContent = "❤️ 감사합니다!";
+          document.getElementById("msg").textContent = "커피 한 잔이 잘 전달되었습니다. axdraw를 계속 좋게 만들겠습니다.";
+        } else {
+          document.getElementById("title").textContent = "결제 승인에 실패했습니다";
+          document.getElementById("msg").textContent = (res.d && (res.d.message || res.d.error)) || "다시 시도해주세요.";
+        }
+      }).catch(function () {
+        document.getElementById("title").textContent = "결제 승인에 실패했습니다";
+        document.getElementById("msg").textContent = "네트워크 오류 — 다시 시도해주세요.";
+      });
+  </script>
+</body>
+</html>
