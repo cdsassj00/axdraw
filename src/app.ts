@@ -121,7 +121,17 @@ import {
   type SnapLine,
 } from "./scene/interactive";
 import { renderStaticScene, screenToScene, type Viewport } from "./scene/renderer";
-import { clearStoredScene, loadScene, saveScene } from "./scene/storage";
+import {
+  clearStoredScene,
+  createBoard,
+  currentBoardId,
+  deleteBoard,
+  listBoards,
+  loadScene,
+  saveScene,
+  setCurrentBoard,
+  type BoardMeta,
+} from "./scene/storage";
 import { createShareLink, loadSharedScene } from "./scene/share";
 import { CollabSession, ROOM_HASH_PATTERN } from "./scene/collab";
 import type {
@@ -2538,6 +2548,59 @@ export class App {
   /* ---------------------------------------------------------------- *
    * Scene lifecycle
    * ---------------------------------------------------------------- */
+
+  /* ---------------------------------------------------------------- *
+   * Boards (multiple canvases)
+   * ---------------------------------------------------------------- */
+
+  listBoards(): BoardMeta[] {
+    return listBoards();
+  }
+
+  currentBoardId(): string {
+    return currentBoardId();
+  }
+
+  /** Saves the current board and opens a fresh empty one. */
+  newBoard(): void {
+    saveScene(this.elements, this.files, this.state);
+    const board = createBoard();
+    this.openBoard(board.id);
+    this.onMessage?.(`${board.name} — 새 캔버스`);
+  }
+
+  /** Saves the current board and switches to another. */
+  openBoard(id: string): void {
+    if (this.collab) this.stopCollab(); // A board switch is a different document.
+    saveScene(this.elements, this.files, this.state);
+    setCurrentBoard(id);
+    const loaded = loadScene();
+    this.elements = (loaded?.elements ?? []).map((element) =>
+      normalizeImportedElement(element as unknown as Record<string, unknown>),
+    );
+    this.files = loaded?.files ?? {};
+    this.state.selectedIds = new Set();
+    this.remoteElementIds = new Set();
+    clearShapeCache();
+    clearImageCache();
+    this.history.reset(this.elements, this.state.selectedIds);
+    if (this.elements.length) this.zoomToFit();
+    this.commit();
+  }
+
+  deleteBoard(id: string): void {
+    const boards = listBoards();
+    if (boards.length <= 1) {
+      this.onError?.("마지막 캔버스는 삭제할 수 없습니다");
+      return;
+    }
+    deleteBoard(id);
+    if (id === currentBoardId()) {
+      const next = listBoards()[0];
+      this.openBoard(next.id);
+    }
+    this.notify();
+  }
 
   clearCanvas(): void {
     // Tombstones, not an empty array — collaborators must see the clear too.
