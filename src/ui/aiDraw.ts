@@ -43,6 +43,7 @@ export function openAiDrawDialog(app: App): void {
       const elements = buildAiElements(spec);
       if (!elements.length) throw new Error(t("The AI could not draw that — try rephrasing"));
       app.insertTemplate(elements);
+      app.zoomToFit();
       close();
     } catch (error) {
       status.textContent =
