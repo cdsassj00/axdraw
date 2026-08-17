@@ -69,6 +69,32 @@ export function getCornerRadius(dimension: number, element: AxElement): number {
   return proportional <= ROUNDNESS_MAX_RADIUS ? proportional : ROUNDNESS_MAX_RADIUS;
 }
 
+/**
+ * Insert intermediate points wherever consecutive samples are far apart.
+ *
+ * The closed Catmull-Rom generator derives each segment's tangents from its
+ * neighbours, so a long straight edge sitting next to a densely sampled corner
+ * arc produces huge control offsets (~edge/6) that shoot the curve straight
+ * past the corner — the taller the rectangle, the longer the spike. Bounding
+ * the spacing bounds the tangents, which keeps edges inside their corners.
+ */
+function densify(points: RPoint[], maxSpacing = 24): RPoint[] {
+  const result: RPoint[] = [];
+  const count = points.length;
+  for (let i = 0; i < count; i++) {
+    const curr = points[i];
+    const next = points[(i + 1) % count];
+    result.push(curr);
+    const distance = Math.hypot(next[0] - curr[0], next[1] - curr[1]);
+    const splits = Math.floor(distance / maxSpacing);
+    for (let s = 1; s <= splits; s++) {
+      const t = s / (splits + 1);
+      result.push([curr[0] + (next[0] - curr[0]) * t, curr[1] + (next[1] - curr[1]) * t]);
+    }
+  }
+  return result;
+}
+
 /** Sample a polygon outline with rounded corners into a dense point list. */
 function roundedPolygonPoints(points: RPoint[], radius: number, samples = 8): RPoint[] {
   if (radius <= 0) return points;
@@ -101,7 +127,7 @@ function roundedPolygonPoints(points: RPoint[], radius: number, samples = 8): RP
     }
     result.push(end);
   }
-  return result;
+  return densify(result);
 }
 
 function rectanglePoints(element: AxElement): RPoint[] {
