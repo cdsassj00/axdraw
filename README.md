@@ -81,6 +81,8 @@ npm run test:e2e # 브라우저 자동화 테스트 31개
 
 **입력** — 마우스, 펜(필압 반영), 터치(그리기 + 두 손가락 확대/이동) 모두 지원.
 
+**클라우드 공유 (무료)** — Excalidraw는 클라우드 저장·공유가 유료(Excalidraw+)지만, axdraw는 메뉴 → "Share link…" (또는 `Ctrl+K` → 공유 링크) 한 번으로 공유 URL이 클립보드에 복사됩니다. 장면은 **브라우저에서 AES-GCM으로 암호화한 뒤** Cloudflare Workers KV에 올라가고, 복호화 키는 URL의 `#` 프래그먼트에만 있어서 서버로 전송되지 않습니다. 서버는 자기가 저장한 내용을 읽을 수 없습니다. 링크를 열면 그 장면이 바로 캔버스에 로드됩니다.
+
 ---
 
 ## 단축키
@@ -119,7 +121,27 @@ public/fonts/     번들된 손글씨 웹폰트 (Caveat + Gaegu, OFL)
 
 ## 배포
 
-정적 파일이라 아무 곳에나 올리면 됩니다.
+### Cloudflare (권장 — 공유 서버 포함)
+
+Worker 하나가 정적 앱(`dist/`)과 공유 API를 함께 서빙합니다. 최초 1회 설정 후에는 `npm run deploy` 한 번이면 됩니다.
+
+```bash
+npx wrangler login
+npx wrangler kv namespace create SCENES   # 출력된 id를 wrangler.toml에 붙여넣기
+npm run deploy                            # 빌드 + https://axdraw.<계정>.workers.dev 배포
+```
+
+Workers 무료 플랜(일 10만 요청, KV 1GB)으로 충분합니다. 서버 코드는 `worker/index.js` 60줄이 전부입니다.
+
+GitHub Pages 같은 정적 호스팅에 앱을 두고 공유 API만 Worker를 쓰려면 빌드할 때 주소를 지정합니다:
+
+```bash
+VITE_SHARE_API=https://axdraw.<계정>.workers.dev npm run build
+```
+
+### 정적 호스팅
+
+정적 파일이라 아무 곳에나 올리면 됩니다. (공유 기능만 위의 Worker가 필요합니다.)
 
 ```bash
 npm run build              # dist/

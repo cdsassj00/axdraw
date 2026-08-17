@@ -23,6 +23,7 @@ export const icons: Record<string, string> = {
   redo: wrap('<path d="M20 9H9a5 5 0 0 0 0 10h7"/><path d="M16 5l4 4-4 4"/>'),
   trash: wrap('<path d="M4.5 6.5h15"/><path d="M9 6.5V4.8A1.3 1.3 0 0 1 10.3 3.5h3.4A1.3 1.3 0 0 1 15 4.8v1.7"/><path d="M6.5 6.5 7.5 20a1.5 1.5 0 0 0 1.5 1.4h6a1.5 1.5 0 0 0 1.5-1.4l1-13.5"/>'),
   duplicate: wrap('<rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2"/><path d="M15.5 5.5A2 2 0 0 0 13.5 3.5h-8a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2"/>'),
+  link: wrap('<path d="M10 14a4 4 0 0 0 6 .4l3-3a4 4 0 0 0-5.6-5.6l-1.7 1.7"/><path d="M14 10a4 4 0 0 0-6-.4l-3 3a4 4 0 0 0 5.6 5.6l1.7-1.7"/>'),
   menu: wrap('<path d="M4 7h16M4 12h16M4 17h16"/>'),
   plus: wrap('<path d="M12 5v14M5 12h14"/>'),
   minus: wrap('<path d="M5 12h14"/>'),

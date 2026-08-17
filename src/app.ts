@@ -122,6 +122,7 @@ import {
 } from "./scene/interactive";
 import { renderStaticScene, screenToScene, type Viewport } from "./scene/renderer";
 import { clearStoredScene, loadScene, saveScene } from "./scene/storage";
+import { createShareLink, loadSharedScene } from "./scene/share";
 import type {
   AppState,
   AxElement,
@@ -553,6 +554,7 @@ export class App {
   /** Set by the UI so right-click can open the menu. */
   onContextMenu: ((point: Point, clientX: number, clientY: number) => void) | null = null;
   onError: ((message: string) => void) | null = null;
+  onMessage: ((message: string) => void) | null = null;
   /** Set by the UI layer; toggles the command palette. */
   onToggleCommandPalette: (() => void) | null = null;
 
@@ -2475,6 +2477,43 @@ export class App {
   saveToFile(): void {
     const json = serializeScene(this.elements, this.files, this.state);
     downloadBlob(new Blob([json], { type: "application/json" }), `drawing${FILE_EXTENSION}`);
+  }
+
+  /** Uploads the encrypted scene and puts a share URL on the clipboard. */
+  async shareLink(): Promise<void> {
+    if (!this.elements.some((element) => !element.isDeleted)) {
+      this.onError?.("Nothing to share");
+      return;
+    }
+    try {
+      const url = await createShareLink(this.elements, this.files, this.state);
+      await navigator.clipboard.writeText(url);
+      this.onMessage?.("Share link copied to clipboard");
+    } catch (error) {
+      this.onError?.(error instanceof Error ? error.message : "Sharing failed");
+    }
+  }
+
+  /** Replaces the canvas with a scene fetched from a share link, if present. */
+  async loadFromShareLink(): Promise<void> {
+    try {
+      const scene = await loadSharedScene();
+      if (!scene) return;
+      this.elements = scene.elements;
+      this.files = scene.files;
+      this.state.selectedIds = new Set();
+      if (scene.appState.viewBackgroundColor) {
+        this.state.viewBackgroundColor = scene.appState.viewBackgroundColor;
+      }
+      clearShapeCache();
+      clearImageCache();
+      this.history.reset(this.elements, this.state.selectedIds);
+      this.zoomToFit();
+      this.commit();
+      this.onMessage?.("Opened a shared drawing");
+    } catch (error) {
+      this.onError?.(error instanceof Error ? error.message : "Could not load the shared scene");
+    }
   }
 
   async openFile(): Promise<void> {
