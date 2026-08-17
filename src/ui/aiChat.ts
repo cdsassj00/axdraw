@@ -75,7 +75,10 @@ function buildPanel(app: App): HTMLElement {
               void requestAiDrawing(message.content.slice(0, 600))
                 .then((spec) => {
                   const elements = buildAiElements(spec);
-                  if (elements.length) app.insertTemplate(elements);
+                  if (elements.length) {
+                    app.insertTemplate(elements);
+                    app.zoomToFit();
+                  }
                 })
                 .catch(() => undefined)
                 .finally(() => {
