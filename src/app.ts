@@ -2567,7 +2567,11 @@ export class App {
     saveScene(this.elements, this.files, this.state);
     const board = createBoard();
     this.openBoard(board.id);
+<<<<<<< HEAD
     this.onMessage?.(board.name);
+=======
+    this.onMessage?.(`${board.name} — 새 캔버스`);
+>>>>>>> origin/main
   }
 
   /** Saves the current board and switches to another. */
@@ -2592,7 +2596,11 @@ export class App {
   deleteBoard(id: string): void {
     const boards = listBoards();
     if (boards.length <= 1) {
+<<<<<<< HEAD
       this.onError?.(t("The last canvas cannot be deleted"));
+=======
+      this.onError?.("마지막 캔버스는 삭제할 수 없습니다");
+>>>>>>> origin/main
       return;
     }
     deleteBoard(id);
