@@ -56,6 +56,11 @@ export const FONT_STACKS: Record<FontFamily, string> = {
   normal:
     '"Helvetica Neue", Helvetica, Arial, "Pretendard", "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif',
   code: '"Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, "D2Coding", "Nanum Gothic Coding", monospace',
+  /* Free web fonts, loaded from CDN in index.html (display=swap, so text
+     renders in the fallback until they arrive). */
+  pretendard: '"Pretendard Variable", Pretendard, "Noto Sans KR", "Malgun Gothic", sans-serif',
+  noto: '"Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif',
+  serif: '"Noto Serif KR", "Nanum Myeongjo", Batang, Georgia, serif',
 };
 
 /** Families that must be loaded before text can be measured accurately. */

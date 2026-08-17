@@ -220,7 +220,9 @@ export class App {
       gridEnabled: false,
       gridSize: DEFAULT_GRID_SIZE,
       snapEnabled: true,
-      shapeRecognition: true,
+      // Off by default: the pen should draw what the hand drew. Conversion
+      // is on demand (right-click → convert) or opt-in via the wand toggle.
+      shapeRecognition: false,
       zenMode: false,
       viewMode: false,
       statsEnabled: false,
@@ -1427,6 +1429,35 @@ export class App {
     this.afterCreate(element, false);
   }
 
+  /** On-demand recognition for selected pen strokes (context menu / palette). */
+  convertSelectedFreedraw(): void {
+    const strokes = this.getSelectedElements().filter(
+      (element): element is FreedrawElement => element.type === "freedraw",
+    );
+    if (!strokes.length) return;
+    let single: { stroke: FreedrawElement; absolute: Pt[]; replacement: AxElement } | null = null;
+    let converted = 0;
+    for (const stroke of strokes) {
+      const absolute: Pt[] = stroke.points.map(([x, y]) => [stroke.x + x, stroke.y + y]);
+      const recognized = recognizeShape(absolute);
+      if (!recognized) continue;
+      const replacement = this.buildRecognizedElement(recognized);
+      if (!replacement) continue;
+      this.elements = this.elements.map((item) => (item.id === stroke.id ? replacement : item));
+      this.state.selectedIds.delete(stroke.id);
+      this.state.selectedIds.add(replacement.id);
+      converted += 1;
+      if (strokes.length === 1) single = { stroke, absolute, replacement };
+    }
+    if (!converted) {
+      this.onError?.("No clean shape recognised — the stroke stays freehand");
+      return;
+    }
+    this.commit();
+    // For a single stroke, offer the alternates chip just like live assist.
+    if (single) this.openRecognitionChoice(single.stroke, single.absolute, single.replacement);
+  }
+
   /* ---------------------------------------------------------------- *
    * Recognition choice
    *
@@ -1570,6 +1601,13 @@ export class App {
 
   private afterCreate(element: AxElement, select = true): void {
     if (select) this.state.selectedIds = new Set([element.id]);
+    // The pen is a continuous tool — you draw stroke after stroke, so it
+    // keeps the tool without needing Q-lock. Shapes still hand back to
+    // selection so the freshly drawn shape can be adjusted immediately.
+    if (this.state.tool === "freedraw") {
+      this.commit();
+      return;
+    }
     if (!this.state.toolLocked && this.state.tool !== "selection") {
       this.setTool("selection", false);
       if (select) this.state.selectedIds = new Set([element.id]);

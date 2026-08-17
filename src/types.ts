@@ -20,7 +20,7 @@ export type ToolType =
 
 export type FillStyle = "hachure" | "cross-hatch" | "solid" | "zigzag";
 export type StrokeStyle = "solid" | "dashed" | "dotted";
-export type FontFamily = "hand" | "normal" | "code";
+export type FontFamily = "hand" | "normal" | "code" | "pretendard" | "noto" | "serif";
 export type TextAlign = "left" | "center" | "right";
 export type VerticalAlign = "top" | "middle" | "bottom";
 export type Arrowhead = "none" | "arrow" | "triangle" | "triangle-outline" | "dot" | "bar" | "diamond";
