@@ -81,30 +81,40 @@ export class Room {
 // Groq retires model ids over time, so instead of hard-coding one we ask
 // the API what exists and take the first preference that matches. Cached
 // per isolate; a Worker restart re-resolves.
-let groqModelCache = null;
-const GROQ_PREFERENCES = [
-  "llama-3.3-70b-versatile",
-  "openai/gpt-oss-120b",
-  "openai/gpt-oss-20b",
-  "llama-3.1-8b-instant",
-];
-async function pickGroqModel(key) {
-  if (groqModelCache) return groqModelCache;
+let groqModelsCache = null;
+async function listGroqModels(key) {
+  if (groqModelsCache) return groqModelsCache;
   try {
     const response = await fetch("https://api.groq.com/openai/v1/models", {
       headers: { authorization: `Bearer ${key}` },
     });
-    if (!response.ok) return null;
+    if (!response.ok) return new Set();
     const { data } = await response.json();
-    const ids = new Set((data ?? []).map((m) => m.id));
-    const preferred = GROQ_PREFERENCES.find((id) => ids.has(id));
-    // Otherwise any instruct-style llama/gpt model beats failing outright.
-    const fallback = [...ids].find((id) => /llama|gpt|qwen/i.test(id) && !/whisper|tts|guard|vision/i.test(id));
-    groqModelCache = preferred ?? fallback ?? null;
-    return groqModelCache;
+    groqModelsCache = new Set((data ?? []).map((m) => m.id));
+    return groqModelsCache;
   } catch {
-    return null;
+    return new Set();
   }
+}
+// Preference lists survive Groq's model retirements: first available wins,
+// then any instruct-style model, then null (which surfaces as an error).
+const DRAW_PREFERENCES = [
+  "openai/gpt-oss-120b",
+  "llama-3.3-70b-versatile",
+  "openai/gpt-oss-20b",
+  "llama-3.1-8b-instant",
+];
+const CHAT_PREFERENCES = [
+  "openai/gpt-oss-20b",
+  "gemma2-9b-it",
+  "llama-3.1-8b-instant",
+  "openai/gpt-oss-120b",
+];
+async function pickGroqModel(key, preferences) {
+  const ids = await listGroqModels(key);
+  const preferred = preferences.find((id) => ids.has(id));
+  const fallback = [...ids].find((id) => /llama|gpt|qwen|gemma/i.test(id) && !/whisper|tts|guard|vision/i.test(id));
+  return preferred ?? fallback ?? null;
 }
 
 export default {
@@ -153,7 +163,7 @@ export default {
           ? {
               base: "https://api.groq.com/openai/v1",
               key: env.GROQ_API_KEY,
-              model: env.AI_MODEL || (await pickGroqModel(env.GROQ_API_KEY)),
+              model: env.AI_MODEL || (await pickGroqModel(env.GROQ_API_KEY, DRAW_PREFERENCES)),
             }
           : env.OPENROUTER_API_KEY
             ? {
@@ -171,18 +181,26 @@ export default {
         }
 
         const system = [
-          "You lay out diagrams for a hand-drawn whiteboard. Reply with ONLY a JSON object:",
+          "You are a diagram designer for a hand-drawn whiteboard. Reply with ONLY a JSON object:",
           '{"elements": [ ... ]}. Each element:',
           '{"type":"rectangle"|"ellipse"|"diamond"|"arrow"|"line"|"text",',
           ' "x":number, "y":number, "width":number, "height":number,',
           ' "label":"centred text on a shape (optional)",',
           ' "text":"content, only for type=text",',
-          ' "points":[[0,0],[dx,dy],...] relative to (x,y), only for arrow/line,',
+          ' "points":[[0,0],[dx,dy],...] numbers relative to (x,y), only for arrow/line,',
           ' "strokeColor":"#hex", "backgroundColor":"#hex fill for shapes",',
           ' "fontSize":number, "angle":radians (all optional)}',
-          "Coordinates: y grows downward; keep the drawing within roughly 900x650 starting near (0,0).",
-          "Shapes are typically 140-200 wide and 60-90 tall; leave 40-80px gaps; connect flow steps with arrows.",
-          "Pleasant pastel fills: #a5d8ff blue, #b2f2bb green, #ffec99 yellow, #ffc9c9 red, #d0bfff purple.",
+          "",
+          "DESIGN RULES — follow all of them; they are what makes the result beautiful:",
+          "1. Add a title: a text element at the top, fontSize 28, strokeColor #1e293b.",
+          "2. Align to a grid. Same-role shapes share the exact same width, height, and x (columns) or y (rows). Column spacing 260-300, row spacing 130-150.",
+          "3. Uniform shape size: main boxes 200x80. Decision diamonds 220x110. Terminal ellipses 180x76.",
+          "4. Every flow step is CONNECTED with an arrow. Arrows run straight: vertical arrows go from the bottom-centre of one box (x = box.x + width/2, y = box.y + height) straight down with points [[0,0],[0,50]]; horizontal arrows from the right-centre with points [[0,0],[60,0]]. Arrow strokeColor #64748b.",
+          "5. Consistent palette, one colour per role/branch. Fills: #dbeafe blue, #dcfce7 green, #fef9c3 yellow, #fee2e2 red, #f3e8ff purple, #ffedd5 orange. Matching stroke: #3b82f6, #22c55e, #eab308, #ef4444, #a855f7, #f97316. White #ffffff for neutral boxes.",
+          "6. Short labels: 2-4 words, never sentences. Annotations go in separate small text elements (fontSize 14, strokeColor #64748b) beside the flow, not inside boxes.",
+          "7. For mind maps: central ellipse, branches spread radially, every branch node linked to its parent with a line element whose points actually reach from parent edge to child edge.",
+          "8. Be generous: 15-40 elements. Cover the topic properly — a title, the full flow, side annotations.",
+          "Coordinates: y grows downward; keep everything within 1100x750 starting near (0,0).",
           "Write labels in the same language as the user's request. Maximum 60 elements. JSON only, no prose.",
         ].join("\n");
 
@@ -227,6 +245,74 @@ export default {
           return json({ error: "AI returned no elements" }, 502);
         }
         return json({ elements: elements.slice(0, 60) });
+      }
+
+      // AI chat: a small assistant panel in the app. Same key handling as
+      // /api/ai/draw; AI_CHAT_MODEL overrides the default chat model.
+      if (url.pathname === "/api/ai/chat" && request.method === "POST") {
+        const provider = env.GROQ_API_KEY
+          ? {
+              base: "https://api.groq.com/openai/v1",
+              key: env.GROQ_API_KEY,
+              model: env.AI_CHAT_MODEL || (await pickGroqModel(env.GROQ_API_KEY, CHAT_PREFERENCES)),
+            }
+          : env.OPENROUTER_API_KEY
+            ? {
+                base: "https://openrouter.ai/api/v1",
+                key: env.OPENROUTER_API_KEY,
+                model: env.AI_CHAT_MODEL || "openai/gpt-4o-mini",
+              }
+            : null;
+        if (!provider) return json({ error: "AI is not configured" }, 501);
+        if (!provider.model) return json({ error: "no usable AI model found" }, 502);
+
+        const { messages } = await request.json().catch(() => ({}));
+        if (
+          !Array.isArray(messages) ||
+          !messages.length ||
+          messages.length > 20 ||
+          !messages.every(
+            (m) =>
+              m &&
+              (m.role === "user" || m.role === "assistant") &&
+              typeof m.content === "string" &&
+              m.content.length <= 4000,
+          )
+        ) {
+          return json({ error: "invalid messages" }, 400);
+        }
+
+        const upstream = await fetch(`${provider.base}/chat/completions`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${provider.key}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model: provider.model,
+            temperature: 0.7,
+            max_tokens: 1500,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are the assistant inside axdraw, a hand-drawn style whiteboard. " +
+                  "Answer in the user's language, concisely and helpfully. Plain text only — no markdown headings or code fences. " +
+                  "When the user asks for content that could go on the canvas (outlines, plans, summaries, lists), " +
+                  "write it so it reads well as canvas text: short lines, one idea per line.",
+              },
+              ...messages,
+            ],
+          }),
+        });
+        if (!upstream.ok) {
+          const detail = await upstream.text();
+          return json({ error: `AI request failed (${upstream.status})`, detail: detail.slice(0, 300) }, 502);
+        }
+        const completion = await upstream.json();
+        const reply = completion.choices?.[0]?.message?.content?.trim();
+        if (!reply) return json({ error: "AI returned no reply" }, 502);
+        return json({ reply });
       }
 
       const room = /^\/api\/rooms\/([A-Za-z0-9]+)\/ws$/.exec(url.pathname);

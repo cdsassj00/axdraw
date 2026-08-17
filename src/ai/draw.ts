@@ -46,6 +46,8 @@ function style(overrides: Partial<ItemStyle>): ItemStyle {
 
 function styleFrom(item: AiSpecItem, extra: Partial<ItemStyle> = {}): ItemStyle {
   return style({
+    // AI-generated text reads best in a clean Korean-friendly face.
+    fontFamily: "pretendard",
     ...(item.strokeColor ? { strokeColor: item.strokeColor } : {}),
     ...(item.backgroundColor ? { backgroundColor: item.backgroundColor, fillStyle: "solid" as const } : {}),
     ...(item.strokeWidth ? { strokeWidth: item.strokeWidth } : {}),
