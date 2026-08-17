@@ -165,6 +165,25 @@ VITE_BASE=/axdraw/ npm run build   # 하위 경로로 서비스할 때
 
 ---
 
+## AI로 그리기 (MCP)
+
+`mcp/index.js`는 의존성 없는 MCP 서버입니다(Node 20+). AI 에이전트(Claude Code 등)가 axdraw에 직접 그림을 그릴 수 있게 합니다.
+
+```bash
+claude mcp add axdraw -- node /path/to/axdraw/mcp/index.js
+```
+
+제공 도구:
+
+- **`axdraw_create_drawing`** — 요소 명세(사각형/타원/마름모/화살표/선/텍스트, `label`로 도형 가운데 글자)를 받아 장면을 만들고, 브라우저와 같은 방식으로 **클라이언트에서 암호화**해 공유 API에 올린 뒤 `https://axdraw.org/#share=…` 링크를 돌려줍니다. 서버에는 암호문만 저장되고 키는 URL 프래그먼트에만 있습니다.
+- **`axdraw_draw_live`** — 사용자가 라이브 협업을 켜고 `#room=…` 링크를 붙여넣으면, AI가 그 방에 접속해 **실시간으로 캔버스에 그립니다.** (같은 E2E 암호화 프로토콜 사용)
+
+셀프 호스팅이라면 `AXDRAW_ORIGIN=https://내주소` 환경 변수로 대상 서버를 바꿀 수 있습니다.
+
+예: "로그인 흐름을 플로차트로 그려서 링크 줘" → AI가 도형·화살표·라벨을 만들어 공유 링크를 반환 → 열면 axdraw 캔버스에서 바로 편집할 수 있습니다.
+
+---
+
 ## Excalidraw와의 관계
 
 Excalidraw 코드를 가져오지 않고 처음부터 새로 구현했습니다. 파일 형식과 조작 방식은 익숙하게 쓸 수 있도록 호환을 맞췄고(`.excalidraw` 파일 열기, 같은 단축키), 손그림 렌더링은 rough.js가 쓰는 것과 같은 방식의 알고리즘을 직접 구현했습니다. 도형 자동 인식은 Excalidraw에 없는 기능입니다.
