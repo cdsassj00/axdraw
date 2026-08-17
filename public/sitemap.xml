@@ -6,7 +6,11 @@
     <priority>1.0</priority>
   </url>
   <url>
+<<<<<<< HEAD
+    <loc>https://axdraw.sjshin.workers.dev/about</loc>
+=======
     <loc>https://axdraw.sjshin.workers.dev/about.html</loc>
+>>>>>>> origin/main
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
