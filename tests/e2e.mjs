@@ -58,7 +58,7 @@ try {
     // Web fonts come from CDNs; the test sandbox is offline and the app is
     // built to degrade to fallback stacks, so those load failures are noise.
     const url = message.location()?.url ?? "";
-    if (/fonts\.googleapis|fonts\.gstatic|cdn\.jsdelivr/.test(url)) return;
+    if (/fonts\.googleapis|fonts\.gstatic|cdn\.jsdelivr|googletagmanager/.test(url)) return;
     if (message.type() === "error") errors.push(message.text());
   });
 

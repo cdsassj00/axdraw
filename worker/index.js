@@ -20,7 +20,7 @@ const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, OPTIONS",
-  "access-control-allow-headers": "content-type",
+  "access-control-allow-headers": "content-type, x-ai-key",
 };
 
 function randomId(length = 10) {
@@ -117,6 +117,36 @@ async function pickGroqModel(key, preferences) {
   return preferred ?? fallback ?? null;
 }
 
+// Bring-your-own-key: a personal Groq key relayed by the client in the
+// x-ai-key header. Used only for this request; never stored or logged.
+// Server keys (secrets) win when configured. Model env overrides only
+// apply to the server's own key.
+async function resolveAiProvider(request, env, modelEnv, preferences) {
+  const userKey = (request.headers.get("x-ai-key") || "").trim();
+  if (env.GROQ_API_KEY) {
+    return {
+      base: "https://api.groq.com/openai/v1",
+      key: env.GROQ_API_KEY,
+      model: modelEnv || (await pickGroqModel(env.GROQ_API_KEY, preferences)),
+    };
+  }
+  if (env.OPENROUTER_API_KEY) {
+    return {
+      base: "https://openrouter.ai/api/v1",
+      key: env.OPENROUTER_API_KEY,
+      model: modelEnv || "openai/gpt-4o-mini",
+    };
+  }
+  if (userKey && /^gsk_[A-Za-z0-9_-]{10,200}$/.test(userKey)) {
+    return {
+      base: "https://api.groq.com/openai/v1",
+      key: userKey,
+      model: await pickGroqModel(userKey, preferences),
+    };
+  }
+  return null;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -159,19 +189,7 @@ export default {
       // a Worker secret — GROQ_API_KEY or OPENROUTER_API_KEY (Groq wins if
       // both are set); AI_MODEL optionally overrides the default model.
       if (url.pathname === "/api/ai/draw" && request.method === "POST") {
-        const provider = env.GROQ_API_KEY
-          ? {
-              base: "https://api.groq.com/openai/v1",
-              key: env.GROQ_API_KEY,
-              model: env.AI_MODEL || (await pickGroqModel(env.GROQ_API_KEY, DRAW_PREFERENCES)),
-            }
-          : env.OPENROUTER_API_KEY
-            ? {
-                base: "https://openrouter.ai/api/v1",
-                key: env.OPENROUTER_API_KEY,
-                model: env.AI_MODEL || "openai/gpt-4o-mini",
-              }
-            : null;
+        const provider = await resolveAiProvider(request, env, env.AI_MODEL, DRAW_PREFERENCES);
         if (!provider) return json({ error: "AI is not configured" }, 501);
         if (!provider.model) return json({ error: "no usable AI model found" }, 502);
 
@@ -294,19 +312,7 @@ export default {
       // AI chat: a small assistant panel in the app. Same key handling as
       // /api/ai/draw; AI_CHAT_MODEL overrides the default chat model.
       if (url.pathname === "/api/ai/chat" && request.method === "POST") {
-        const provider = env.GROQ_API_KEY
-          ? {
-              base: "https://api.groq.com/openai/v1",
-              key: env.GROQ_API_KEY,
-              model: env.AI_CHAT_MODEL || (await pickGroqModel(env.GROQ_API_KEY, CHAT_PREFERENCES)),
-            }
-          : env.OPENROUTER_API_KEY
-            ? {
-                base: "https://openrouter.ai/api/v1",
-                key: env.OPENROUTER_API_KEY,
-                model: env.AI_CHAT_MODEL || "openai/gpt-4o-mini",
-              }
-            : null;
+        const provider = await resolveAiProvider(request, env, env.AI_CHAT_MODEL, CHAT_PREFERENCES);
         if (!provider) return json({ error: "AI is not configured" }, 501);
         if (!provider.model) return json({ error: "no usable AI model found" }, 502);
 
