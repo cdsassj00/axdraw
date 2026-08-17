@@ -202,28 +202,69 @@ export default {
           "7. For mind maps: central ellipse, branches spread radially, every branch node linked to its parent with a line element whose points actually reach from parent edge to child edge.",
           "8. Be generous and complete: produce AT LEAST 15 elements (title + every step + every connector + 2-4 side annotations). A diagram with fewer than 15 elements is a failure.",
           "Coordinates: y grows downward; keep everything within 1100x750 starting near (0,0).",
+          'Arrows and lines MUST use x,y (start) and x2,y2 (end). The key "points" is FORBIDDEN — never emit it.',
           "Write labels in the same language as the user's request. Maximum 60 elements. JSON only, no prose.",
         ].join("\n");
 
-        const upstream = await fetch(`${provider.base}/chat/completions`, {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${provider.key}`,
-            "content-type": "application/json",
+        const DIAGRAM_SCHEMA = {
+          type: "object",
+          properties: {
+            elements: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  type: { type: "string", enum: ["rectangle", "ellipse", "diamond", "arrow", "line", "text"] },
+                  x: { type: "number" },
+                  y: { type: "number" },
+                  width: { type: "number" },
+                  height: { type: "number" },
+                  x2: { type: "number" },
+                  y2: { type: "number" },
+                  label: { type: "string" },
+                  text: { type: "string" },
+                  strokeColor: { type: "string" },
+                  backgroundColor: { type: "string" },
+                  fontSize: { type: "number" },
+                },
+                required: ["type", "x", "y"],
+                additionalProperties: false,
+              },
+            },
           },
-          body: JSON.stringify({
-            model: provider.model,
-            temperature: 0.4,
-            max_tokens: 8000,
-            response_format: { type: "json_object" },
-            // gpt-oss models burn the budget on hidden reasoning otherwise.
-            ...(provider.model.includes("gpt-oss") ? { reasoning_effort: "low" } : {}),
-            messages: [
-              { role: "system", content: system },
-              { role: "user", content: prompt },
-            ],
-          }),
+          required: ["elements"],
+          additionalProperties: false,
+        };
+
+        const callModel = (responseFormat) =>
+          fetch(`${provider.base}/chat/completions`, {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${provider.key}`,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              model: provider.model,
+              temperature: 0.4,
+              max_tokens: 8000,
+              response_format: responseFormat,
+              // gpt-oss models burn the budget on hidden reasoning otherwise.
+              ...(provider.model.includes("gpt-oss") ? { reasoning_effort: "low" } : {}),
+              messages: [
+                { role: "system", content: system },
+                { role: "user", content: prompt },
+              ],
+            }),
+          });
+        // Structured output guarantees numeric coordinates; fall back to
+        // plain JSON mode for models that don't support json_schema.
+        let upstream = await callModel({
+          type: "json_schema",
+          json_schema: { name: "diagram", schema: DIAGRAM_SCHEMA },
         });
+        if (!upstream.ok && upstream.status === 400) {
+          upstream = await callModel({ type: "json_object" });
+        }
         if (!upstream.ok) {
           const detail = await upstream.text();
           return json({ error: `AI request failed (${upstream.status})`, detail: detail.slice(0, 300) }, 502);
