@@ -107,8 +107,8 @@ export class TextEditor {
 
     const raw = textarea.value;
     const wrapWidth = this.container ? getContainerTextWidth(this.container) : Infinity;
-    const text = this.container ? wrapText(raw, element.fontSize, element.fontFamily, wrapWidth) : raw;
-    const metrics = measureText(text, element.fontSize, element.fontFamily, element.lineHeight);
+    const text = this.container ? wrapText(raw, element.fontSize, element.fontFamily, wrapWidth, element.letterSpacing) : raw;
+    const metrics = measureText(text, element.fontSize, element.fontFamily, element.lineHeight, element.letterSpacing);
 
     mutateElement(element, {
       text,
@@ -155,6 +155,7 @@ export class TextEditor {
     textarea.style.top = `${top}px`;
     textarea.style.font = getFontString(element.fontSize * viewport.zoom, element.fontFamily);
     textarea.style.lineHeight = String(element.lineHeight);
+    textarea.style.letterSpacing = `${(element.letterSpacing ?? 0) * viewport.zoom}px`;
     textarea.style.color = element.strokeColor;
     textarea.style.opacity = String(element.opacity / 100);
     textarea.style.textAlign = element.textAlign;

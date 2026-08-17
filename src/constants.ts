@@ -77,6 +77,8 @@ export const ROUNDNESS_MAX_RADIUS = 32;
 
 export const DEFAULT_STYLE: ItemStyle = {
   strokeColor: "#1e1e1e",
+  lineHeight: DEFAULT_LINE_HEIGHT,
+  letterSpacing: 0,
   backgroundColor: "transparent",
   fillStyle: "hachure",
   strokeWidth: 1,

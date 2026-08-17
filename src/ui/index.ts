@@ -407,6 +407,34 @@ export function createUI(app: App): void {
             ),
           ),
         ]),
+        section("Line height", [
+          h("div", { class: "slider-row" }, [
+            h("input", {
+              type: "range", min: "1", max: "2.5", step: "0.05",
+              value: String(style.lineHeight ?? 1.25),
+              onpointerdown: () => { sliderActive = true; },
+              oninput: (event: Event) => {
+                sliderActive = true;
+                app.setStyle({ lineHeight: Number((event.target as HTMLInputElement).value) });
+              },
+            }),
+            h("span", { text: `${(style.lineHeight ?? 1.25).toFixed(2)}`, style: { fontSize: "12px", minWidth: "34px" } }),
+          ]),
+        ]),
+        section("Letter spacing", [
+          h("div", { class: "slider-row" }, [
+            h("input", {
+              type: "range", min: "-1", max: "10", step: "0.5",
+              value: String(style.letterSpacing ?? 0),
+              onpointerdown: () => { sliderActive = true; },
+              oninput: (event: Event) => {
+                sliderActive = true;
+                app.setStyle({ letterSpacing: Number((event.target as HTMLInputElement).value) });
+              },
+            }),
+            h("span", { text: `${style.letterSpacing ?? 0}px`, style: { fontSize: "12px", minWidth: "34px" } }),
+          ]),
+        ]),
         section("Font size", [
           optionRow(
             Object.entries(FONT_SIZES).map(([label, value]) => ({

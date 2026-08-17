@@ -180,6 +180,7 @@ function roundRectPath(
 }
 
 function renderText(ctx: CanvasRenderingContext2D, element: TextElement): void {
+  (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${element.letterSpacing ?? 0}px`;
   const lines = element.text.split("\n");
   const lineHeight = element.fontSize * element.lineHeight;
   ctx.font = getFontString(element.fontSize, element.fontFamily);
@@ -199,6 +200,7 @@ function renderText(ctx: CanvasRenderingContext2D, element: TextElement): void {
   for (let i = 0; i < lines.length; i++) {
     ctx.fillText(lines[i], anchorX, element.y + i * lineHeight + baselineOffset);
   }
+  (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = "0px";
 }
 
 function renderImage(

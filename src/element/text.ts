@@ -17,9 +17,11 @@ export function getFontString(fontSize: number, fontFamily: FontFamily): string 
   return `${fontSize}px ${FONT_STACKS[fontFamily]}`;
 }
 
-export function measureLineWidth(line: string, font: string): number {
+export function measureLineWidth(line: string, font: string, letterSpacing = 0): number {
   const ctx = getMeasureContext();
   ctx.font = font;
+  // canvas letterSpacing (Chrome 99+/Safari 17+); older engines just ignore it.
+  (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${letterSpacing}px`;
   return ctx.measureText(line).width;
 }
 
@@ -29,11 +31,11 @@ export interface TextMetrics {
   lines: string[];
 }
 
-export function measureText(text: string, fontSize: number, fontFamily: FontFamily, lineHeight = DEFAULT_LINE_HEIGHT): TextMetrics {
+export function measureText(text: string, fontSize: number, fontFamily: FontFamily, lineHeight = DEFAULT_LINE_HEIGHT, letterSpacing = 0): TextMetrics {
   const font = getFontString(fontSize, fontFamily);
   const lines = text.split("\n");
   let width = 0;
-  for (const line of lines) width = Math.max(width, measureLineWidth(line, font));
+  for (const line of lines) width = Math.max(width, measureLineWidth(line, font, letterSpacing));
   return { width, height: lines.length * fontSize * lineHeight, lines };
 }
 
@@ -46,7 +48,7 @@ function isBreakableChar(char: string): boolean {
  * Greedy word wrap that also breaks inside CJK runs and inside words that are
  * longer than the available width.
  */
-export function wrapText(text: string, fontSize: number, fontFamily: FontFamily, maxWidth: number): string {
+export function wrapText(text: string, fontSize: number, fontFamily: FontFamily, maxWidth: number, letterSpacing = 0): string {
   if (!Number.isFinite(maxWidth) || maxWidth <= 0) return text;
   const font = getFontString(fontSize, fontFamily);
   const output: string[] = [];
@@ -86,12 +88,12 @@ export function wrapText(text: string, fontSize: number, fontFamily: FontFamily,
 
     for (const token of tokens) {
       const candidate = line + token;
-      if (measureLineWidth(candidate.trimEnd(), font) <= maxWidth || line === "") {
-        if (line === "" && measureLineWidth(token.trimEnd(), font) > maxWidth) {
+      if (measureLineWidth(candidate.trimEnd(), font, letterSpacing) <= maxWidth || line === "") {
+        if (line === "" && measureLineWidth(token.trimEnd(), font, letterSpacing) > maxWidth) {
           // A single token wider than the box: hard-break it per character.
           let chunk = "";
           for (const char of token) {
-            if (measureLineWidth(chunk + char, font) > maxWidth && chunk !== "") {
+            if (measureLineWidth(chunk + char, font, letterSpacing) > maxWidth && chunk !== "") {
               output.push(chunk);
               chunk = char;
             } else {
