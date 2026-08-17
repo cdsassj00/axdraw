@@ -199,7 +199,7 @@ export default {
           "5. Consistent palette, one colour per role/branch. Fills: #dbeafe blue, #dcfce7 green, #fef9c3 yellow, #fee2e2 red, #f3e8ff purple, #ffedd5 orange. Matching stroke: #3b82f6, #22c55e, #eab308, #ef4444, #a855f7, #f97316. White #ffffff for neutral boxes.",
           "6. Short labels: 2-4 words, never sentences. Annotations go in separate small text elements (fontSize 14, strokeColor #64748b) beside the flow, not inside boxes.",
           "7. For mind maps: central ellipse, branches spread radially, every branch node linked to its parent with a line element whose points actually reach from parent edge to child edge.",
-          "8. Be generous: 15-40 elements. Cover the topic properly — a title, the full flow, side annotations.",
+          "8. Be generous and complete: produce AT LEAST 15 elements (title + every step + every connector + 2-4 side annotations). A diagram with fewer than 15 elements is a failure.",
           "Coordinates: y grows downward; keep everything within 1100x750 starting near (0,0).",
           "Write labels in the same language as the user's request. Maximum 60 elements. JSON only, no prose.",
         ].join("\n");
@@ -213,8 +213,10 @@ export default {
           body: JSON.stringify({
             model: provider.model,
             temperature: 0.4,
-            max_tokens: 4000,
+            max_tokens: 8000,
             response_format: { type: "json_object" },
+            // gpt-oss models burn the budget on hidden reasoning otherwise.
+            ...(provider.model.includes("gpt-oss") ? { reasoning_effort: "low" } : {}),
             messages: [
               { role: "system", content: system },
               { role: "user", content: prompt },
