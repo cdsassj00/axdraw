@@ -5,7 +5,8 @@
  */
 
 import type { App } from "../app";
-import { AiNotConfiguredError, buildAiElements, requestAiDrawing } from "../ai/draw";
+import { AiNotConfiguredError, aiHeaders, buildAiElements, requestAiDrawing } from "../ai/draw";
+import { buildAiKeyForm } from "./aiKey";
 import { DEFAULT_STYLE } from "../constants";
 import { newTextElement } from "../element/factory";
 import { t } from "../i18n";
@@ -114,7 +115,7 @@ function buildPanel(app: App): HTMLElement {
     try {
       const response = await fetch(`${API_BASE}/api/ai/chat`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: aiHeaders(),
         body: JSON.stringify({ messages: history.slice(-12) }),
       });
       if (response.status === 501) throw new AiNotConfiguredError();
@@ -126,15 +127,28 @@ function buildPanel(app: App): HTMLElement {
       append(reply);
     } catch (error) {
       pending.remove();
-      append({
-        role: "assistant",
-        content:
-          error instanceof AiNotConfiguredError
-            ? t("AI drawing is not set up on this server yet")
-            : error instanceof Error
-              ? error.message
-              : String(error),
-      });
+      if (error instanceof AiNotConfiguredError) {
+        // Pop the unanswered user turn (history and bubble) so the retry
+        // after saving a key sends a clean history without duplicates.
+        history.pop();
+        const row = h("div", { class: "ai-chat-msg ai-chat-assistant" });
+        row.appendChild(
+          buildAiKeyForm(() => {
+            row.remove();
+            const bubbles = log.querySelectorAll(".ai-chat-user");
+            bubbles[bubbles.length - 1]?.remove();
+            input.value = content;
+            void run();
+          }),
+        );
+        log.appendChild(row);
+        log.scrollTop = log.scrollHeight;
+      } else {
+        append({
+          role: "assistant",
+          content: error instanceof Error ? error.message : String(error),
+        });
+      }
     } finally {
       busy = false;
       send.disabled = false;

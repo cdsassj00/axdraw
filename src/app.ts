@@ -1090,7 +1090,22 @@ export class App {
   }
 
   private applyAngleSnap(element: LinearElement, scene: Point): Point {
-    if (!this.shiftKey) return this.maybeSnapToGrid(scene);
+    if (!this.shiftKey) {
+      // Nearly-straight strokes settle onto the axis without needing Shift:
+      // within ~4° of horizontal or vertical the wobble is unintentional.
+      const target = this.maybeSnapToGrid(scene);
+      const anchorIndex = Math.max(0, element.points.length - 2);
+      const anchor = {
+        x: element.x + element.points[anchorIndex][0],
+        y: element.y + element.points[anchorIndex][1],
+      };
+      const dx = target.x - anchor.x;
+      const dy = target.y - anchor.y;
+      const ratio = Math.tan((4 * Math.PI) / 180);
+      if (Math.abs(dy) <= Math.abs(dx) * ratio) return { x: target.x, y: anchor.y };
+      if (Math.abs(dx) <= Math.abs(dy) * ratio) return { x: anchor.x, y: target.y };
+      return target;
+    }
     const anchorIndex = Math.max(0, element.points.length - 2);
     const anchor = {
       x: element.x + element.points[anchorIndex][0],

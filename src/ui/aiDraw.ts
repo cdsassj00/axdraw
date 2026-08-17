@@ -3,6 +3,7 @@
 import type { App } from "../app";
 import { AiNotConfiguredError, buildAiElements, requestAiDrawing } from "../ai/draw";
 import { t } from "../i18n";
+import { buildAiKeyForm } from "./aiKey";
 import { h } from "./dom";
 
 export function openAiDrawDialog(app: App): void {
@@ -25,6 +26,7 @@ export function openAiDrawDialog(app: App): void {
     placeholder: t("Describe what to draw — e.g. login flow flowchart"),
   }) as HTMLTextAreaElement;
   const status = h("div", { class: "ai-status", text: "" });
+  const keySlot = h("div", {});
   const generate = h("button", {
     class: "primary-btn",
     type: "button",
@@ -46,12 +48,13 @@ export function openAiDrawDialog(app: App): void {
       app.zoomToFit();
       close();
     } catch (error) {
-      status.textContent =
-        error instanceof AiNotConfiguredError
-          ? t("AI drawing is not set up on this server yet")
-          : error instanceof Error
-            ? error.message
-            : t("The AI could not draw that — try rephrasing");
+      if (error instanceof AiNotConfiguredError) {
+        status.textContent = "";
+        keySlot.replaceChildren(buildAiKeyForm(() => void run()));
+      } else {
+        status.textContent =
+          error instanceof Error ? error.message : t("The AI could not draw that — try rephrasing");
+      }
     } finally {
       busy = false;
       generate.disabled = false;
@@ -71,6 +74,7 @@ export function openAiDrawDialog(app: App): void {
       h("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } }, [
         input,
         h("div", { style: { display: "flex", alignItems: "center", gap: "10px" } }, [generate, status]),
+        keySlot,
       ]),
     ]),
   );

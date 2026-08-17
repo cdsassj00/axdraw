@@ -851,6 +851,45 @@ input[type="range"] {
   font-size: 13.5px;
 }
 
+.ai-key-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px dashed var(--separator);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.ai-key-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.ai-key-guide a {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.ai-key-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ai-key-input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--separator);
+  border-radius: 8px;
+  background: var(--island-bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+}
+
 .tpl-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

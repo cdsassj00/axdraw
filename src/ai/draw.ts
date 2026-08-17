@@ -31,10 +31,39 @@ export interface AiSpecItem {
 
 export class AiNotConfiguredError extends Error {}
 
+/**
+ * Bring-your-own-key: when the server has no AI key (or the user prefers
+ * their own), a personal Groq key from console.groq.com is kept in
+ * localStorage and relayed per-request. The worker never stores it.
+ */
+const AI_KEY_STORAGE = "axdraw:ai-key";
+
+export function getUserAiKey(): string {
+  try {
+    return localStorage.getItem(AI_KEY_STORAGE) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setUserAiKey(key: string): void {
+  try {
+    if (key) localStorage.setItem(AI_KEY_STORAGE, key);
+    else localStorage.removeItem(AI_KEY_STORAGE);
+  } catch {
+    // Storage unavailable; the key just won't persist.
+  }
+}
+
+export function aiHeaders(): Record<string, string> {
+  const key = getUserAiKey();
+  return { "content-type": "application/json", ...(key ? { "x-ai-key": key } : {}) };
+}
+
 export async function requestAiDrawing(prompt: string): Promise<AiSpecItem[]> {
   const response = await fetch(`${API_BASE}/api/ai/draw`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: aiHeaders(),
     body: JSON.stringify({ prompt }),
   });
   if (response.status === 501) throw new AiNotConfiguredError();
