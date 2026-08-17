@@ -180,6 +180,18 @@ claude mcp add axdraw -- node /path/to/axdraw/mcp/index.js
 
 셀프 호스팅이라면 `AXDRAW_ORIGIN=https://내주소` 환경 변수로 대상 서버를 바꿀 수 있습니다.
 
+### 사이트 안에서 AI로 그리기 (✨ AI 버튼)
+
+상단의 **AI** 버튼은 프롬프트를 받아 Worker의 `/api/ai/draw`로 보내고, 저렴한 챗 모델이 만든 도형 명세를 캔버스에 삽입합니다. 서버에 API 키를 등록해야 켜집니다 — 하나만 있으면 됩니다:
+
+```bash
+npx wrangler secret put GROQ_API_KEY        # console.groq.com — 무료 티어 있음
+# 또는
+npx wrangler secret put OPENROUTER_API_KEY  # openrouter.ai
+```
+
+기본 모델은 Groq `llama-3.3-70b-versatile`, OpenRouter `openai/gpt-4o-mini`이고 `AI_MODEL` 환경 변수(wrangler.toml `[vars]` 또는 대시보드)로 바꿀 수 있습니다. 키가 없으면 버튼은 "아직 설정되지 않았습니다" 안내만 띄웁니다. 프롬프트는 모델 제공사로 전달되므로(그림 데이터는 로컬에 남음) 공유 링크의 E2E 암호화와는 별개입니다.
+
 예: "로그인 흐름을 플로차트로 그려서 링크 줘" → AI가 도형·화살표·라벨을 만들어 공유 링크를 반환 → 열면 axdraw 캔버스에서 바로 편집할 수 있습니다.
 
 ---

@@ -742,6 +742,28 @@ input[type="range"] {
   font-size: 12px;
 }
 
+.ai-prompt {
+  width: 100%;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--separator);
+  border-radius: 10px;
+  background: var(--island-bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+}
+
+.ai-prompt:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ai-status {
+  font-size: 13px;
+  color: var(--text-muted, #888);
+}
+
 .tpl-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
