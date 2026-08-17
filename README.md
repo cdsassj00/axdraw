@@ -131,9 +131,12 @@ Worker 하나가 정적 앱(`dist/`)과 공유 API를 함께 서빙합니다. �
 
 ```bash
 npx wrangler login
-npx wrangler kv namespace create SCENES   # 출력된 id를 wrangler.toml에 붙여넣기
-npm run deploy                            # 빌드 + https://axdraw.<계정>.workers.dev 배포
+npm run deploy      # 빌드 + https://axdraw.<계정>.workers.dev 배포
 ```
+
+(KV 네임스페이스는 이미 생성되어 `wrangler.toml`에 들어 있습니다.)
+
+**자동 배포**: 저장소 Settings → Secrets → Actions에 `CLOUDFLARE_API_TOKEN`(대시보드 → API Tokens → "Edit Cloudflare Workers" 템플릿 + Workers KV Storage: Edit)을 등록하면, 이후 기본 브랜치에 푸시할 때마다 `.github/workflows/deploy-cloudflare.yml`이 알아서 배포합니다. 시크릿이 없으면 워크플로는 조용히 건너뜁니다.
 
 Workers 무료 플랜(일 10만 요청, KV 1GB, Durable Objects 포함)으로 충분합니다. 서버 코드는 `worker/index.js` 하나가 전부입니다 — KV 공유 저장 + 협업 방(Durable Object) 중계.
 

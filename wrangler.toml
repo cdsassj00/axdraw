@@ -1,8 +1,7 @@
 # Cloudflare deployment: the Worker serves both the built app (dist/) and the
-# share API. One-time setup, then `npm run deploy` does everything:
+# share API. The KV namespace below already exists; deploying is:
 #
 #   npx wrangler login
-#   npx wrangler kv namespace create SCENES   # paste the printed id below
 #   npm run deploy
 #
 name = "axdraw"
@@ -16,7 +15,7 @@ run_worker_first = ["/api/*"]
 
 [[kv_namespaces]]
 binding = "SCENES"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "261bee1a18784ee881e372399b7408eb"
 
 # Live-collaboration rooms. No extra setup — the migration below creates the
 # class on first deploy.
