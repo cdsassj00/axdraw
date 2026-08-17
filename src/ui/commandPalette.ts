@@ -83,6 +83,7 @@ export const COMMANDS: Command[] = [
   { id: "view.theme", label: "Toggle dark mode", ko: "다크 모드 전환", group: "보기", run: (a) => a.setTheme(a.state.theme === "dark" ? "light" : "dark") },
 
   // File
+  { id: "board.new", label: "New canvas", ko: "새 캔버스", group: "파일", run: (a) => a.newBoard() },
   { id: "file.save", label: "Save to file", ko: "파일로 저장", group: "파일", shortcut: "Ctrl+S", run: (a) => a.saveToFile() },
   { id: "file.open", label: "Open file", ko: "파일 열기", group: "파일", shortcut: "Ctrl+O", run: (a) => void a.openFile() },
   { id: "file.png", label: "Export as PNG", ko: "PNG로 내보내기", group: "파일", run: (a) => void a.exportPng() },

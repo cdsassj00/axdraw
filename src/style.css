@@ -648,6 +648,54 @@ input[type="range"] {
   font-size: 12px;
 }
 
+.board-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.board-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.board-open {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--separator);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.board-open:hover {
+  background: var(--button-hover);
+}
+
+.board-open.is-current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.board-date {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.board-delete {
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
 .tpl-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

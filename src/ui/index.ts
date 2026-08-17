@@ -719,6 +719,9 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
   };
 
   menu.append(
+    menuItem("plus", "New canvas", null, run(() => app.newBoard())),
+    menuItem("duplicate", "Boards…", null, run(() => openBoardsDialog(app))),
+    h("div", { class: "dropdown-separator" }),
     menuItem("upload", "Open…", "Ctrl+O", run(() => void app.openFile())),
     menuItem("download", "Save to file", "Ctrl+S", run(() => app.saveToFile())),
     menuItem("image", "Export image…", "Ctrl+E", run(() => openExportDialog(app))),
@@ -786,6 +789,75 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
 
   root.appendChild(menu);
   const dispose = dismissable(menu, close);
+}
+
+/** Boards — every canvas saved in this browser, newest first. */
+function openBoardsDialog(app: App): void {
+  const backdrop = h("div", { class: "modal-backdrop" });
+  const close = (): void => backdrop.remove();
+  backdrop.addEventListener("pointerdown", (event) => {
+    if (event.target === backdrop) close();
+  });
+  window.addEventListener("keydown", function onKey(event) {
+    if (event.key === "Escape") {
+      close();
+      window.removeEventListener("keydown", onKey);
+    }
+  });
+
+  const list = h("div", { class: "board-list" });
+  const renderRows = (): void => {
+    list.replaceChildren(
+      ...app.listBoards().map((board) =>
+        h("div", { class: "board-row" }, [
+          h(
+            "button",
+            {
+              class: `board-open${board.id === app.currentBoardId() ? " is-current" : ""}`,
+              type: "button",
+              onclick: () => {
+                app.openBoard(board.id);
+                close();
+              },
+            },
+            [
+              h("span", { class: "board-name", text: board.name }),
+              h("span", { class: "board-date", text: new Date(board.updated).toLocaleString() }),
+            ],
+          ),
+          h("button", {
+            class: "secondary-btn board-delete",
+            type: "button",
+            text: "삭제",
+            onclick: () => {
+              app.deleteBoard(board.id);
+              renderRows();
+            },
+          }),
+        ]),
+      ),
+    );
+  };
+  renderRows();
+
+  backdrop.append(
+    h("div", { class: "modal island", style: { width: "min(480px, 100%)" } }, [
+      h("div", { class: "modal-header" }, [
+        h("h2", { text: "캔버스" }),
+        h("button", {
+          class: "primary-btn",
+          type: "button",
+          text: "+ 새 캔버스",
+          onclick: () => {
+            app.newBoard();
+            close();
+          },
+        }),
+      ]),
+      list,
+    ]),
+  );
+  document.body.appendChild(backdrop);
 }
 
 function openContextMenu(
