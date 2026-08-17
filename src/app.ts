@@ -2326,24 +2326,47 @@ export class App {
 
   undo(): void {
     const entry = this.history.undo();
-    if (!entry) return;
-    this.elements = entry.elements;
-    this.state.selectedIds = new Set(entry.selectedIds);
-    clearShapeCache();
-    this.scheduleRender();
-    this.schedulePersist();
-    this.notify();
+    if (entry) this.applyHistoryEntry(entry);
   }
 
   redo(): void {
     const entry = this.history.redo();
-    if (!entry) return;
+    if (entry) this.applyHistoryEntry(entry);
+  }
+
+  private applyHistoryEntry(entry: { elements: AxElement[]; selectedIds: string[] }): void {
+    if (this.collab) {
+      // A restored snapshot is an *older* state; for peers to accept it via
+      // last-writer-wins its elements must look newer than what they hold.
+      const latest = new Map(this.elements.map((element) => [element.id, element.version]));
+      for (const element of entry.elements) {
+        const current = latest.get(element.id);
+        if (current !== undefined && element.version <= current) {
+          element.version = current + 1;
+          element.updated = Date.now();
+        }
+      }
+      // Elements absent from the snapshot are either my own later creations
+      // (undoing a create — peers need a tombstone, not silence) or a peer's
+      // work that arrived between my commits (keep it: my undo is not their
+      // delete).
+      const inSnapshot = new Set(entry.elements.map((element) => element.id));
+      for (const element of this.elements) {
+        if (inSnapshot.has(element.id)) continue;
+        if (this.remoteElementIds.has(element.id)) {
+          entry.elements.push(element);
+        } else if (!element.isDeleted) {
+          entry.elements.push(mutateElement(element, { isDeleted: true }));
+        }
+      }
+    }
     this.elements = entry.elements;
     this.state.selectedIds = new Set(entry.selectedIds);
     clearShapeCache();
     this.scheduleRender();
     this.schedulePersist();
     this.notify();
+    this.collab?.queueBroadcast();
   }
 
   get canUndo(): boolean {
@@ -2517,7 +2540,10 @@ export class App {
    * ---------------------------------------------------------------- */
 
   clearCanvas(): void {
-    this.elements = [];
+    // Tombstones, not an empty array — collaborators must see the clear too.
+    this.elements = this.elements.map((element) =>
+      element.isDeleted ? element : mutateElement(element, { isDeleted: true }),
+    );
     this.files = {};
     this.state.selectedIds = new Set();
     clearShapeCache();
@@ -2551,6 +2577,8 @@ export class App {
    * ---------------------------------------------------------------- */
 
   collab: CollabSession | null = null;
+  /** Ids first seen in a peer broadcast — my undo must never delete these. */
+  private remoteElementIds = new Set<string>();
 
   /** Starts a room (or re-copies the link of the current one). */
   async startCollab(): Promise<void> {
@@ -2592,6 +2620,7 @@ export class App {
     const merged = new Map<string, AxElement>();
     for (const element of this.elements) merged.set(element.id, element);
     for (const element of remote) {
+      if (!merged.has(element.id)) this.remoteElementIds.add(element.id);
       const local = merged.get(element.id);
       if (
         !local ||
