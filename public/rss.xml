@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>axdraw — 한국형 Excalidraw</title>
+    <link>https://axdraw.org/</link>
+    <description>무료 손그림 화이트보드. 실시간 협업·클라우드 공유·도형 자동 인식까지 로그인 없이 전부 무료.</description>
+    <language>ko</language>
+    <item>
+      <title>axdraw — 무료 손그림 화이트보드 (실시간 협업·클라우드 공유 무료)</title>
+      <link>https://axdraw.org/</link>
+      <guid>https://axdraw.org/</guid>
+      <description>Excalidraw처럼 그리고, 유료였던 것까지 무료로. 실시간 협업, 종단간 암호화 클라우드 공유, 도형 자동 인식, 멀티 캔버스, 도식 템플릿. 로그인 없이 바로 사용.</description>
+      <pubDate>Sun, 17 Aug 2026 00:00:00 +0900</pubDate>
+    </item>
+    <item>
+      <title>axdraw 소개 — 무료 Excalidraw 대안</title>
+      <link>https://axdraw.org/about</link>
+      <guid>https://axdraw.org/about</guid>
+      <description>Excalidraw와의 정직한 비교: 실시간 협업·클라우드 공유 무료, E2E 암호화, .excalidraw 파일 호환, 한글 지원.</description>
+      <pubDate>Sun, 17 Aug 2026 00:00:00 +0900</pubDate>
+    </item>
+  </channel>
+</rss>
