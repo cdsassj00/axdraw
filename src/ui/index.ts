@@ -20,6 +20,7 @@ import { openConfirmDialog, openExportDialog, openHelpDialog, showToast } from "
 import { COFFEE_URL, CREDIT_LABEL, CREDIT_URL } from "../constants";
 import { openTemplateDialog } from "./templates";
 import { openAiDrawDialog } from "./aiDraw";
+import { toggleAiChat } from "./aiChat";
 import { LOCALE_NAMES, locale, setLocale, t, type Locale } from "../i18n";
 import { button, dismissable, h } from "./dom";
 import { iconEl } from "./icons";
@@ -191,6 +192,13 @@ export function createUI(app: App): void {
           className: "btn--wide",
           title: t("Draw with AI"),
           onClick: () => openAiDrawDialog(app),
+        }),
+        button({
+          icon: iconEl("help"),
+          label: "챗",
+          className: "btn--wide",
+          title: t("AI chat"),
+          onClick: () => toggleAiChat(app),
         }),
       ]),
     );
@@ -983,6 +991,7 @@ function openContextMenu(
   if (!selected.length) {
     menu.append(
       menuItem("copy", "Paste", "Ctrl+V", run(() => app.pasteFromClipboard())),
+      menuItem("upload", "Attach file…", null, run(() => app.pickAttachment())),
       menuItem("selection", "Select all", "Ctrl+A", run(() => app.selectAll())),
       menuItem("grid", `${app.state.gridEnabled ? "Hide" : "Show"} grid`, "Ctrl+'", run(() => app.toggleGrid())),
       menuItem("zoomReset", "Zoom to fit", "Shift+1", run(() => app.zoomToFit())),

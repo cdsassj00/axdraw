@@ -764,6 +764,93 @@ input[type="range"] {
   color: var(--text-muted, #888);
 }
 
+.ai-chat {
+  position: fixed;
+  right: 16px;
+  bottom: 72px;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(520px, calc(100vh - 140px));
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  gap: 10px;
+  z-index: 40;
+}
+
+.ai-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+}
+
+.ai-chat-log {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 120px;
+}
+
+.ai-chat-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ai-chat-user {
+  align-items: flex-end;
+}
+
+.ai-chat-bubble {
+  max-width: 90%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--button-hover);
+  font-size: 13.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-chat-user .ai-chat-bubble {
+  background: var(--accent);
+  color: #fff;
+}
+
+.ai-chat-pending {
+  color: var(--text-muted);
+}
+
+.ai-chat-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.ai-chat-actions .secondary-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.ai-chat-compose {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.ai-chat-compose textarea {
+  flex: 1;
+  resize: none;
+  padding: 8px 10px;
+  border: 1px solid var(--separator);
+  border-radius: 10px;
+  background: var(--island-bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13.5px;
+}
+
 .tpl-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
