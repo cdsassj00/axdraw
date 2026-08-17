@@ -78,6 +78,35 @@ export class Room {
   }
 }
 
+// Groq retires model ids over time, so instead of hard-coding one we ask
+// the API what exists and take the first preference that matches. Cached
+// per isolate; a Worker restart re-resolves.
+let groqModelCache = null;
+const GROQ_PREFERENCES = [
+  "llama-3.3-70b-versatile",
+  "openai/gpt-oss-120b",
+  "openai/gpt-oss-20b",
+  "llama-3.1-8b-instant",
+];
+async function pickGroqModel(key) {
+  if (groqModelCache) return groqModelCache;
+  try {
+    const response = await fetch("https://api.groq.com/openai/v1/models", {
+      headers: { authorization: `Bearer ${key}` },
+    });
+    if (!response.ok) return null;
+    const { data } = await response.json();
+    const ids = new Set((data ?? []).map((m) => m.id));
+    const preferred = GROQ_PREFERENCES.find((id) => ids.has(id));
+    // Otherwise any instruct-style llama/gpt model beats failing outright.
+    const fallback = [...ids].find((id) => /llama|gpt|qwen/i.test(id) && !/whisper|tts|guard|vision/i.test(id));
+    groqModelCache = preferred ?? fallback ?? null;
+    return groqModelCache;
+  } catch {
+    return null;
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -122,18 +151,19 @@ export default {
       if (url.pathname === "/api/ai/draw" && request.method === "POST") {
         const provider = env.GROQ_API_KEY
           ? {
-              url: "https://api.groq.com/openai/v1/chat/completions",
+              base: "https://api.groq.com/openai/v1",
               key: env.GROQ_API_KEY,
-              model: env.AI_MODEL || "llama-3.3-70b-versatile",
+              model: env.AI_MODEL || (await pickGroqModel(env.GROQ_API_KEY)),
             }
           : env.OPENROUTER_API_KEY
             ? {
-                url: "https://openrouter.ai/api/v1/chat/completions",
+                base: "https://openrouter.ai/api/v1",
                 key: env.OPENROUTER_API_KEY,
                 model: env.AI_MODEL || "openai/gpt-4o-mini",
               }
             : null;
         if (!provider) return json({ error: "AI is not configured" }, 501);
+        if (!provider.model) return json({ error: "no usable AI model found" }, 502);
 
         const { prompt } = await request.json().catch(() => ({}));
         if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 600) {
@@ -156,7 +186,7 @@ export default {
           "Write labels in the same language as the user's request. Maximum 60 elements. JSON only, no prose.",
         ].join("\n");
 
-        const upstream = await fetch(provider.url, {
+        const upstream = await fetch(`${provider.base}/chat/completions`, {
           method: "POST",
           headers: {
             authorization: `Bearer ${provider.key}`,
