@@ -178,3 +178,5 @@ Excalidraw 코드를 가져오지 않고 처음부터 새로 구현했습니다.
 axdraw is a hand-drawn style whiteboard in the spirit of Excalidraw, written from scratch in dependency-free TypeScript, with one extra headline feature: **sketch recognition**. Draw a rough box, circle, diamond, triangle, line or arrow with the freehand tool and it snaps into a clean shape — tilted boxes keep their angle, near-squares become squares, and anything ambiguous stays freehand.
 
 It covers the full editing surface you would expect: every drawing tool, the complete style panel, multi-select with resize/rotate, groups, z-order, alignment and distribution, arrows that stay bound to the shapes they connect, in-shape labels with wrapping, object snapping and grid, infinite pan/zoom with pinch support, dark mode, laser pointer, unlimited undo, local autosave, PNG/SVG/`.axdraw` export, and it opens Excalidraw scene files. Run `npm run test:e2e` for the browser test suite.
+
+<!-- deploy retry: Cloudflare API 503 on run 44 -->
