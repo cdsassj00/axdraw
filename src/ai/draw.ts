@@ -19,6 +19,9 @@ export interface AiSpecItem {
   text?: string;
   label?: string;
   points?: [number, number][];
+  /** Arrow/line end point in absolute coordinates (start is x, y). */
+  x2?: number;
+  y2?: number;
   strokeColor?: string;
   backgroundColor?: string;
   strokeWidth?: number;
@@ -64,8 +67,12 @@ function centredText(text: string, cx: number, cy: number, base: ItemStyle): AxE
   return element;
 }
 
-const num = (value: unknown, fallback: number): number =>
-  typeof value === "number" && Number.isFinite(value) ? value : fallback;
+/** Models sometimes emit numbers as strings; coerce before giving up. */
+const num = (value: unknown, fallback: number): number => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return fallback;
+};
 
 /** Convert the model's spec into real elements. Skips anything malformed. */
 export function buildAiElements(spec: AiSpecItem[]): AxElement[] {
@@ -86,8 +93,13 @@ export function buildAiElements(spec: AiSpecItem[]): AxElement[] {
           break;
         case "arrow":
         case "line": {
-          const raw: [number, number][] =
-            Array.isArray(item.points) && item.points.length >= 2
+          const end: [number, number] | null =
+            item.x2 != null || item.y2 != null
+              ? [num(item.x2, x) - x, num(item.y2, y) - y]
+              : null;
+          const raw: [number, number][] = end
+            ? [[0, 0], end]
+            : Array.isArray(item.points) && item.points.length >= 2
               ? item.points
               : [[0, 0], [num(item.width, 100), num(item.height, 0)]];
           const points = raw
@@ -123,8 +135,9 @@ export function buildAiElements(spec: AiSpecItem[]): AxElement[] {
           break;
       }
       if (item.label && item.type !== "text") {
+        // Labels stay dark and readable no matter what the shape's stroke is.
         const labelStyle = styleFrom(
-          { ...item, backgroundColor: undefined },
+          { ...item, backgroundColor: undefined, strokeColor: "#1e293b" },
           { fontSize: item.fontSize ?? 20 },
         );
         out.push(centredText(String(item.label), x + width / 2, y + height / 2, labelStyle));
