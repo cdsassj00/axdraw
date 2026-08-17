@@ -64,36 +64,29 @@ export function createUI(app: App): void {
 
   root.append(topLeft, toolbar, topRight, bottomLeft, bottomRight, panel, welcome);
 
-  // Top-centre promo banner → CDSA.kr. Fixed in place (the canvas pans, the
-  // banner doesn't); ✕ hides it for this session only.
-  if (!sessionStorage.getItem("axdraw:banner-hidden")) {
-    const banner = h("div", { class: "cdsa-banner" }, [
-      h("span", { class: "cdsa-banner-badge", text: "CDSA" }),
+  // Top-centre banner, always shown (no close button): identity + sponsorship.
+  root.appendChild(
+    h("div", { class: "cdsa-banner" }, [
+      h("span", { class: "cdsa-banner-badge", text: "한국형 Excalidraw" }),
       (() => {
         const link = document.createElement("a");
         link.href = "https://cdsa.kr";
         link.target = "_blank";
         link.rel = "noopener";
-        link.textContent = "한국데이터사이언티스트협회 — 데이터·AI 실무 교육";
+        link.textContent = "CDSA.kr이 만든 무료 화이트보드";
         return link;
       })(),
-      h("button", {
-        class: "cdsa-banner-close",
-        type: "button",
-        "aria-label": "배너 닫기",
-        text: "✕",
-        onclick: () => {
-          banner.remove();
-          try {
-            sessionStorage.setItem("axdraw:banner-hidden", "1");
-          } catch {
-            // Storage unavailable — the banner just stays closed this load.
-          }
-        },
-      }),
-    ]);
-    root.appendChild(banner);
-  }
+      (() => {
+        const coffee = document.createElement("a");
+        coffee.className = "cdsa-banner-coffee";
+        coffee.href = COFFEE_URL || "coffee";
+        coffee.target = "_blank";
+        coffee.rel = "noopener";
+        coffee.textContent = "☕ 후원하기";
+        return coffee;
+      })(),
+    ]),
+  );
 
   const credit = h("div", { class: "credit" });
   const creditLink = document.createElement("a");
