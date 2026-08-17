@@ -135,6 +135,10 @@ export interface BinaryFile {
   mimeType: string;
   dataURL: string;
   created: number;
+  /** Original filename — set for non-image attachments shown as file cards. */
+  name?: string;
+  /** Size in bytes, shown on the file card. */
+  size?: number;
 }
 
 export type BinaryFiles = Record<string, BinaryFile>;

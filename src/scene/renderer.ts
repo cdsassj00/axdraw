@@ -13,6 +13,7 @@ import { getElementShape, getFreedrawStroke } from "../element/shapes";
 import { getFontString } from "../element/text";
 import { draw as drawRough } from "../rough/render";
 import type { AxElement, BinaryFiles, TextElement, Theme } from "../types";
+import { drawFileCard } from "../element/filecard";
 import { ensureImage, getCachedImage } from "./images";
 
 export interface Viewport {
@@ -211,6 +212,11 @@ function renderImage(
 ): void {
   const fileId = (element as { fileId?: string | null }).fileId;
   if (!fileId) return;
+  const file = files[fileId];
+  if (file && !file.mimeType.startsWith("image/")) {
+    drawFileCard(ctx, element, file);
+    return;
+  }
   const image = getCachedImage(fileId);
   if (!image) {
     if (onImageLoad) ensureImage(fileId, files, onImageLoad);
