@@ -54,8 +54,11 @@ export function roughOptionsFor(element: AxElement, continuousPath = false): Rou
     stroke: element.strokeColor,
     fill: element.backgroundColor === "transparent" ? null : element.backgroundColor,
     fillStyle: element.fillStyle,
-    fillWeight: element.strokeWidth / 2,
-    hachureGap: element.strokeWidth * 4,
+    // Hatch/cross-hatch lines stay fine regardless of the outline width —
+    // with the 1-20px stroke slider, tying them to strokeWidth turns fills
+    // into solid smears past ~4px.
+    fillWeight: Math.min(element.strokeWidth / 2, 1),
+    hachureGap: Math.min(element.strokeWidth * 4, 16),
     roughness,
     disableMultiStroke: dashed,
     preserveVertices: continuousPath || roughness < 1,
