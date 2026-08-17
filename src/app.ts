@@ -2104,6 +2104,18 @@ export class App {
     this.commit();
   }
 
+  /** Drops a template's elements at the viewport centre, selected. */
+  insertTemplate(elements: readonly AxElement[]): void {
+    const rect = this.container.getBoundingClientRect();
+    const previous = this.lastPointerScene;
+    this.lastPointerScene = {
+      x: rect.width / 2 / this.state.zoom - this.state.scrollX,
+      y: rect.height / 2 / this.state.zoom - this.state.scrollY,
+    };
+    this.pasteElements(elements);
+    this.lastPointerScene = previous;
+  }
+
   pasteElements(elements: readonly AxElement[], files: BinaryFiles = {}): void {
     if (!elements.length) return;
     const normalized = elements.map((element) =>

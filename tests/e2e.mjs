@@ -179,9 +179,10 @@ try {
   /* ---------------- multi-point lines ---------------- */
 
   await page.keyboard.press("l");
-  await page.mouse.click(900, 500);
-  await page.mouse.click(1000, 560);
-  await page.mouse.click(1100, 480);
+  // Keep clear of the right-side properties panel (x ≥ ~1060).
+  await page.mouse.click(700, 500);
+  await page.mouse.click(800, 560);
+  await page.mouse.click(900, 480);
   await page.keyboard.press("Enter");
   const linePoints = await page.evaluate(() => {
     const line = window.axdraw.elements.filter((element) => element.type === "line").pop();
