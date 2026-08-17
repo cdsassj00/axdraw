@@ -628,6 +628,27 @@ input[type="range"] {
   font-size: 12px;
 }
 
+.credit {
+  display: flex;
+  gap: 10px;
+  padding: 3px 10px;
+  font-size: 11px;
+  border-radius: 980px;
+  background: var(--island-bg);
+  border: 1px solid var(--island-border);
+  backdrop-filter: var(--glass);
+  -webkit-backdrop-filter: var(--glass);
+}
+
+.credit a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.credit a:hover {
+  color: var(--accent);
+}
+
 .toast {
   position: absolute;
   bottom: 70px;

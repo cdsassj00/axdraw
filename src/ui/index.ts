@@ -17,6 +17,7 @@ import {
 } from "../constants";
 import type { Arrowhead, AxElement, FontFamily, ItemStyle, ToolType } from "../types";
 import { openConfirmDialog, openExportDialog, openHelpDialog, showToast } from "./dialogs";
+import { COFFEE_URL, CREDIT_LABEL, CREDIT_URL } from "../constants";
 import { button, dismissable, h } from "./dom";
 import { iconEl } from "./icons";
 import { createCommandPalette } from "./commandPalette";
@@ -60,6 +61,23 @@ export function createUI(app: App): void {
   const welcome = h("div", { class: "welcome" });
 
   root.append(topLeft, toolbar, topRight, bottomLeft, bottomRight, panel, welcome);
+
+  const credit = h("div", { class: "credit" });
+  const creditLink = document.createElement("a");
+  creditLink.href = CREDIT_URL;
+  creditLink.target = "_blank";
+  creditLink.rel = "noopener";
+  creditLink.textContent = CREDIT_LABEL;
+  credit.appendChild(creditLink);
+  if (COFFEE_URL) {
+    const coffee = document.createElement("a");
+    coffee.href = COFFEE_URL;
+    coffee.target = "_blank";
+    coffee.rel = "noopener";
+    coffee.textContent = "☕ Buy me a coffee";
+    credit.appendChild(coffee);
+  }
+  bottomRight.appendChild(credit);
 
   createRecognitionChip(app, root);
   app.onToggleCommandPalette = createCommandPalette(app, root);
