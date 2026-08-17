@@ -825,21 +825,18 @@ input[type="range"] {
   color: #f5d76e;
 }
 
-.cdsa-banner-close {
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
-  color: #b8b09a;
+.cdsa-banner .cdsa-banner-coffee {
+  padding: 4px 12px;
+  border-radius: 980px;
+  background: linear-gradient(90deg, #d4af37, #f5d76e);
+  color: #14120a;
+  font-weight: 700;
   font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
 }
 
-.cdsa-banner-close:hover {
-  background: rgba(255, 255, 255, 0.16);
-  color: #f5d76e;
+.cdsa-banner .cdsa-banner-coffee:hover {
+  color: #14120a;
+  filter: brightness(1.06);
 }
 
 @media (max-width: 730px) {
