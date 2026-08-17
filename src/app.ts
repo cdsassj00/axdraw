@@ -363,9 +363,9 @@ export class App {
         : null;
       const width = container ? getContainerTextWidth(container) : Infinity;
       const wrapped = container
-        ? wrapText(text.originalText, text.fontSize, text.fontFamily, width)
+        ? wrapText(text.originalText, text.fontSize, text.fontFamily, width, text.letterSpacing)
         : text.text;
-      const metrics = measureText(wrapped, text.fontSize, text.fontFamily, text.lineHeight);
+      const metrics = measureText(wrapped, text.fontSize, text.fontFamily, text.lineHeight, text.letterSpacing);
       const nextWidth = container ? width : metrics.width;
       if (Math.abs(text.width - nextWidth) < 0.5 && Math.abs(text.height - metrics.height) < 0.5) {
         continue;
@@ -1256,8 +1256,8 @@ export class App {
     const text = getBoundTextElement(container, this.elements);
     if (!text) return;
     const width = getContainerTextWidth(container);
-    const wrapped = wrapText(text.originalText, text.fontSize, text.fontFamily, width);
-    const metrics = measureText(wrapped, text.fontSize, text.fontFamily, text.lineHeight);
+    const wrapped = wrapText(text.originalText, text.fontSize, text.fontFamily, width, text.letterSpacing);
+    const metrics = measureText(wrapped, text.fontSize, text.fontFamily, text.lineHeight, text.letterSpacing);
     if (container.height < metrics.height + TEXT_CONTAINER_PADDING * 2) {
       mutateElement(container, { height: metrics.height + TEXT_CONTAINER_PADDING * 2 });
     }
@@ -2139,7 +2139,7 @@ export class App {
       // Plain text: drop it on the canvas as a text element.
     }
     const style = this.state.currentStyle;
-    const metrics = measureText(text, style.fontSize, style.fontFamily);
+    const metrics = measureText(text, style.fontSize, style.fontFamily, style.lineHeight, style.letterSpacing);
     const element = newTextElement({
       x: this.lastPointerScene.x,
       y: this.lastPointerScene.y,
@@ -2299,7 +2299,7 @@ export class App {
     for (const element of targets) {
       const updates: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(partial)) {
-        if (key === "fontSize" || key === "fontFamily" || key === "textAlign") {
+        if (key === "fontSize" || key === "fontFamily" || key === "textAlign" || key === "lineHeight" || key === "letterSpacing") {
           if (element.type !== "text") continue;
         }
         if ((key === "startArrowhead" || key === "endArrowhead" || key === "elbowed") && element.type !== "arrow") {
@@ -2317,9 +2317,9 @@ export class App {
           : null;
         const width = container ? getContainerTextWidth(container) : Infinity;
         const wrapped = container
-          ? wrapText(text.originalText, text.fontSize, text.fontFamily, width)
+          ? wrapText(text.originalText, text.fontSize, text.fontFamily, width, text.letterSpacing)
           : text.originalText;
-        const metrics = measureText(wrapped, text.fontSize, text.fontFamily, text.lineHeight);
+        const metrics = measureText(wrapped, text.fontSize, text.fontFamily, text.lineHeight, text.letterSpacing);
         mutateElement(text, {
           text: wrapped,
           width: container ? width : metrics.width,

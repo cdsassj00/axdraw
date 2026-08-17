@@ -109,6 +109,7 @@ export interface TextElement extends BaseElement {
   verticalAlign: VerticalAlign;
   containerId: string | null;
   lineHeight: number;
+  letterSpacing: number;
   autoResize: boolean;
 }
 
@@ -150,6 +151,8 @@ export interface ItemStyle {
   fontSize: number;
   fontFamily: FontFamily;
   textAlign: TextAlign;
+  lineHeight: number;
+  letterSpacing: number;
   startArrowhead: Arrowhead;
   endArrowhead: Arrowhead;
   elbowed: boolean;

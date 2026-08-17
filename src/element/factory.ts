@@ -113,7 +113,7 @@ export function newTextElement(
   },
 ): TextElement {
   const { style } = options;
-  const metrics = measureText(options.text, style.fontSize, style.fontFamily, DEFAULT_LINE_HEIGHT);
+  const metrics = measureText(options.text, style.fontSize, style.fontFamily, style.lineHeight ?? DEFAULT_LINE_HEIGHT, style.letterSpacing ?? 0);
   return {
     ...base("text", options),
     type: "text",
@@ -124,7 +124,8 @@ export function newTextElement(
     textAlign: style.textAlign,
     verticalAlign: options.verticalAlign ?? "top",
     containerId: options.containerId ?? null,
-    lineHeight: DEFAULT_LINE_HEIGHT,
+    lineHeight: style.lineHeight ?? DEFAULT_LINE_HEIGHT,
+    letterSpacing: style.letterSpacing ?? 0,
     autoResize: options.autoResize ?? true,
     width: options.width ?? metrics.width,
     height: options.height ?? metrics.height,

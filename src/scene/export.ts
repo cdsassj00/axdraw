@@ -151,7 +151,7 @@ function elementToSvg(element: AxElement, files: BinaryFiles): string {
       const baseline = text.fontSize * 0.86 + (lineHeight - text.fontSize) / 2;
       lines.forEach((line, index) => {
         parts.push(
-          `<text x="${anchorX}" y="${text.y + index * lineHeight + baseline}" font-family='${FONT_STACKS[text.fontFamily].replace(/"/g, "&quot;")}' font-size="${text.fontSize}px" fill="${text.strokeColor}" text-anchor="${anchor}" style="white-space:pre">${escapeXml(line)}</text>`,
+          `<text x="${anchorX}" y="${text.y + index * lineHeight + baseline}" font-family='${FONT_STACKS[text.fontFamily].replace(/"/g, "&quot;")}' font-size="${text.fontSize}px" letter-spacing="${text.letterSpacing ?? 0}px" fill="${text.strokeColor}" text-anchor="${anchor}" style="white-space:pre">${escapeXml(line)}</text>`,
         );
       });
       break;
@@ -294,6 +294,7 @@ export function normalizeImportedElement(raw: Record<string, unknown>): AxElemen
     element.verticalAlign = (element.verticalAlign as string) ?? "top";
     element.containerId = (element.containerId as string | null) ?? null;
     element.lineHeight = Number(element.lineHeight ?? 1.25);
+    element.letterSpacing = Number(element.letterSpacing ?? 0);
     element.autoResize = element.autoResize !== false;
   }
   if (element.type === "image") {

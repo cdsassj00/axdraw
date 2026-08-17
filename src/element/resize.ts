@@ -203,12 +203,12 @@ export function resizeSingleElement(
     const text = element as TextElement;
     if (isCorner) {
       const nextFontSize = Math.max(4, Math.round(text.fontSize * Math.abs(scaleY)));
-      const metrics = measureText(text.text, nextFontSize, text.fontFamily, text.lineHeight);
+      const metrics = measureText(text.text, nextFontSize, text.fontFamily, text.lineHeight, text.letterSpacing);
       Object.assign(updates, { fontSize: nextFontSize, width: metrics.width, height: metrics.height });
     } else {
       // Side handles set an explicit wrap width.
-      const wrapped = wrapText(text.originalText, text.fontSize, text.fontFamily, absWidth);
-      const metrics = measureText(wrapped, text.fontSize, text.fontFamily, text.lineHeight);
+      const wrapped = wrapText(text.originalText, text.fontSize, text.fontFamily, absWidth, text.letterSpacing);
+      const metrics = measureText(wrapped, text.fontSize, text.fontFamily, text.lineHeight, text.letterSpacing);
       Object.assign(updates, { text: wrapped, autoResize: false, width: absWidth, height: metrics.height });
     }
   }
@@ -289,7 +289,7 @@ export function resizeMultipleElements(
     if (original.type === "text") {
       const text = original as TextElement;
       const nextFontSize = Math.max(4, text.fontSize * Math.abs(scaleY));
-      const metrics = measureText(text.text, nextFontSize, text.fontFamily, text.lineHeight);
+      const metrics = measureText(text.text, nextFontSize, text.fontFamily, text.lineHeight, text.letterSpacing);
       Object.assign(updates, { fontSize: nextFontSize, width: metrics.width, height: metrics.height });
     }
 

@@ -95,6 +95,7 @@ const ko: Dict = {
   "1. Important · Urgent": "1. 중요 · 긴급", "2. Important · Later": "2. 중요 · 여유",
   "3. Delegate": "3. 위임", "4. Drop": "4. 제거",
   "Hand-drawn": "손글씨", "System": "시스템", "Code": "코드",
+  "Line height": "줄 간격", "Letter spacing": "자간",
 };
 
 const ja: Dict = {
@@ -137,6 +138,7 @@ const ja: Dict = {
   "1. Important · Urgent": "1. 重要 · 緊急", "2. Important · Later": "2. 重要 · 余裕",
   "3. Delegate": "3. 委任", "4. Drop": "4. 削除",
   "Hand-drawn": "手書き", "System": "システム", "Code": "コード",
+  "Line height": "行間", "Letter spacing": "字間",
 };
 
 const zh: Dict = {
@@ -179,6 +181,7 @@ const zh: Dict = {
   "1. Important · Urgent": "1. 重要 · 紧急", "2. Important · Later": "2. 重要 · 从容",
   "3. Delegate": "3. 委派", "4. Drop": "4. 舍弃",
   "Hand-drawn": "手写", "System": "系统", "Code": "代码",
+  "Line height": "行距", "Letter spacing": "字距",
 };
 
 const fr: Dict = {
@@ -221,6 +224,7 @@ const fr: Dict = {
   "1. Important · Urgent": "1. Important · Urgent", "2. Important · Later": "2. Important · Plus tard",
   "3. Delegate": "3. Déléguer", "4. Drop": "4. Abandonner",
   "Hand-drawn": "Manuscrite", "System": "Système",
+  "Line height": "Interligne", "Letter spacing": "Espacement",
 };
 
 const DICTS: Partial<Record<Locale, Dict>> = { ko, ja, zh, fr };
