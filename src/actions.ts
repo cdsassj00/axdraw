@@ -60,8 +60,16 @@ export function deleteSelected(slice: SceneSlice): SceneSlice {
     }
   }
 
+  // Tombstone instead of removing: a version-bumped isDeleted flag is a
+  // change that propagates through collaboration's last-writer-wins merge,
+  // where a silent disappearance would be resurrected by the next peer
+  // broadcast. Persistence filters tombstones out, so reloads stay clean.
   return {
-    elements: slice.elements.filter((element) => !doomed.has(element.id)),
+    elements: slice.elements.map((element) =>
+      doomed.has(element.id) && !element.isDeleted
+        ? mutateElement(element, { isDeleted: true })
+        : element,
+    ),
     selectedIds: new Set(),
   };
 }

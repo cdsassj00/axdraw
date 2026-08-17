@@ -13,6 +13,13 @@ interface PersistedState {
   gridSize: number;
   snapEnabled: boolean;
   shapeRecognition: boolean;
+  /**
+   * Shape assist, persisted under a new name: the old `shapeRecognition`
+   * field dates from when assist defaulted ON, so every existing browser
+   * has `true` stored without the user ever choosing it. Ignoring the old
+   * field applies the new off-by-default once; toggles persist here.
+   */
+  shapeAssist?: boolean;
   toolLocked: boolean;
   statsEnabled: boolean;
   zenMode: boolean;
@@ -49,6 +56,7 @@ export function saveScene(
       gridSize: state.gridSize,
       snapEnabled: state.snapEnabled,
       shapeRecognition: state.shapeRecognition,
+      shapeAssist: state.shapeRecognition,
       toolLocked: state.toolLocked,
       statsEnabled: state.statsEnabled,
       zenMode: state.zenMode,
@@ -66,6 +74,11 @@ export function loadScene(): LoadedScene | null {
     const raw = localStorage.getItem(STORAGE_KEY);
     const rawState = localStorage.getItem(STORAGE_STATE_KEY);
     const state: Partial<PersistedState> = rawState ? JSON.parse(rawState) : {};
+    // Migration: only the new field carries the user's actual choice.
+    const assist = state.shapeAssist;
+    delete state.shapeAssist;
+    delete state.shapeRecognition;
+    if (assist !== undefined) state.shapeRecognition = assist;
     if (state.currentStyle) {
       state.currentStyle = { ...DEFAULT_STYLE, ...state.currentStyle };
     }
