@@ -11,6 +11,7 @@ import {
   CANVAS_COLORS,
   EXTENDED_PALETTE,
   FONT_SIZES,
+  FONT_STACKS,
   ROUGHNESS,
   STROKE_COLORS,
 } from "../constants";
@@ -18,6 +19,7 @@ import type { Arrowhead, AxElement, FontFamily, ItemStyle, ToolType } from "../t
 import { openConfirmDialog, openExportDialog, openHelpDialog, showToast } from "./dialogs";
 import { COFFEE_URL, CREDIT_LABEL, CREDIT_URL } from "../constants";
 import { openTemplateDialog } from "./templates";
+import { LOCALE_NAMES, locale, setLocale, t, type Locale } from "../i18n";
 import { button, dismissable, h } from "./dom";
 import { iconEl } from "./icons";
 import { createCommandPalette } from "./commandPalette";
@@ -62,6 +64,37 @@ export function createUI(app: App): void {
 
   root.append(topLeft, toolbar, topRight, bottomLeft, bottomRight, panel, welcome);
 
+  // Top-centre promo banner → CDSA.kr. Fixed in place (the canvas pans, the
+  // banner doesn't); ✕ hides it for this session only.
+  if (!sessionStorage.getItem("axdraw:banner-hidden")) {
+    const banner = h("div", { class: "cdsa-banner" }, [
+      h("span", { class: "cdsa-banner-badge", text: "CDSA" }),
+      (() => {
+        const link = document.createElement("a");
+        link.href = "https://cdsa.kr";
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.textContent = "한국데이터사이언티스트협회 — 데이터·AI 실무 교육";
+        return link;
+      })(),
+      h("button", {
+        class: "cdsa-banner-close",
+        type: "button",
+        "aria-label": "배너 닫기",
+        text: "✕",
+        onclick: () => {
+          banner.remove();
+          try {
+            sessionStorage.setItem("axdraw:banner-hidden", "1");
+          } catch {
+            // Storage unavailable — the banner just stays closed this load.
+          }
+        },
+      }),
+    ]);
+    root.appendChild(banner);
+  }
+
   const credit = h("div", { class: "credit" });
   const creditLink = document.createElement("a");
   creditLink.href = CREDIT_URL;
@@ -69,6 +102,11 @@ export function createUI(app: App): void {
   creditLink.rel = "noopener";
   creditLink.textContent = CREDIT_LABEL;
   credit.appendChild(creditLink);
+  const aboutLink = document.createElement("a");
+  aboutLink.href = "about.html";
+  aboutLink.target = "_blank";
+  aboutLink.textContent = "소개";
+  credit.appendChild(aboutLink);
   if (COFFEE_URL) {
     const coffee = document.createElement("a");
     coffee.href = COFFEE_URL;
@@ -148,9 +186,9 @@ export function createUI(app: App): void {
       h("div", { class: "island", style: { padding: "6px" } }, [
         button({
           icon: iconEl("template"),
-          label: "템플릿",
+          label: "Templates",
           className: "btn--wide",
-          title: "Insert a diagram template",
+          title: "Templates",
           onClick: () => openTemplateDialog(app),
         }),
       ]),
@@ -160,8 +198,8 @@ export function createUI(app: App): void {
       h("button", {
         class: "primary-btn share-btn",
         type: "button",
-        text: "공유",
-        title: "Copy an encrypted share link",
+        text: t("Share"),
+        title: t("Share link…"),
         onclick: () => void app.shareLink(),
       }),
       h("div", { class: "island", style: { display: "flex", gap: "2px", padding: "6px" } }, [
@@ -341,17 +379,27 @@ export function createUI(app: App): void {
     if (textual) {
       panel.append(
         section("Font family", [
-          optionRow(
-            [
-              { value: "hand", label: "✎", title: "Hand-drawn (Caveat · Gaegu)" },
-              { value: "normal", label: "A", title: "Normal (system)" },
-              { value: "code", label: "</>", title: "Code" },
-              { value: "pretendard", label: "Pr", title: "Pretendard" },
-              { value: "noto", label: "노", title: "Noto Sans KR" },
-              { value: "serif", label: "明", title: "Noto Serif KR" },
-            ],
-            style.fontFamily,
-            (value) => app.setStyle({ fontFamily: value as FontFamily }),
+          h(
+            "div",
+            { class: "font-options" },
+            (
+              [
+                ["hand", "Hand-drawn"],
+                ["normal", "System"],
+                ["code", "Code"],
+                ["pretendard", "Pretendard"],
+                ["noto", "Noto Sans KR"],
+                ["serif", "Noto Serif KR"],
+              ] as [FontFamily, string][]
+            ).map(([value, name]) =>
+              h("button", {
+                class: `font-option${style.fontFamily === value ? " is-active" : ""}`,
+                type: "button",
+                style: { fontFamily: FONT_STACKS[value] },
+                text: t(name),
+                onclick: () => app.setStyle({ fontFamily: value }),
+              }),
+            ),
           ),
         ]),
         section("Font size", [
@@ -497,7 +545,8 @@ export function createUI(app: App): void {
  * Panel building blocks
  * ------------------------------------------------------------------ */
 
-function section(label: string, children: HTMLElement[]): HTMLElement {
+function section(rawLabel: string, children: HTMLElement[]): HTMLElement {
+  const label = t(rawLabel);
   return h("div", { class: "panel-section" }, [h("div", { class: "panel-label", text: label }), ...children]);
 }
 
@@ -691,7 +740,7 @@ function menuItem(
     span.innerHTML = iconEl(icon);
     element.append(span.firstElementChild ?? span);
   }
-  element.append(document.createTextNode(label));
+  element.append(document.createTextNode(t(label)));
   if (shortcut) element.append(h("span", { class: "kbd", text: shortcut }));
   return element;
 }
@@ -770,6 +819,11 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
       ),
     ),
     h("div", { class: "dropdown-separator" }),
+    h("div", { class: "dropdown-title", text: t("Language") }),
+    ...(Object.entries(LOCALE_NAMES) as [Locale, string][]).map(([code, name]) =>
+      menuItem(code === locale ? "selection" : "", name, null, () => setLocale(code)),
+    ),
+    h("div", { class: "dropdown-separator" }),
     menuItem("help", "Keyboard shortcuts", "?", run(() => openHelpDialog())),
     menuItem(
       "trash",
@@ -828,7 +882,7 @@ function openBoardsDialog(app: App): void {
           h("button", {
             class: "secondary-btn board-delete",
             type: "button",
-            text: "삭제",
+            text: t("Delete"),
             onclick: () => {
               app.deleteBoard(board.id);
               renderRows();
@@ -843,11 +897,11 @@ function openBoardsDialog(app: App): void {
   backdrop.append(
     h("div", { class: "modal island", style: { width: "min(480px, 100%)" } }, [
       h("div", { class: "modal-header" }, [
-        h("h2", { text: "캔버스" }),
+        h("h2", { text: t("Boards") }),
         h("button", {
           class: "primary-btn",
           type: "button",
-          text: "+ 새 캔버스",
+          text: t("+ New canvas"),
           onclick: () => {
             app.newBoard();
             close();

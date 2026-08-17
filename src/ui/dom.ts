@@ -1,6 +1,14 @@
 /** Tiny DOM helpers — enough structure to build the UI without a framework. */
 
+import { t } from "../i18n";
+
 type Props = Record<string, unknown>;
+
+/** Tooltips carry "Label — Shortcut"; translate the label, keep the keys. */
+function translateTitle(title: string): string {
+  const parts = title.split(" — ");
+  return [t(parts[0]), ...parts.slice(1)].join(" — ");
+}
 
 export function h<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -44,11 +52,12 @@ export interface ButtonOptions {
 }
 
 export function button(options: ButtonOptions): HTMLButtonElement {
+  const title = options.title ?? options.label;
   const element = h("button", {
     class: `btn${options.active ? " is-active" : ""}${options.className ? ` ${options.className}` : ""}`,
     type: "button",
-    title: options.title ?? options.label,
-    "aria-label": options.title ?? options.label,
+    title: title ? translateTitle(title) : undefined,
+    "aria-label": title ? translateTitle(title) : undefined,
     "aria-pressed": options.active ? "true" : undefined,
     disabled: options.disabled,
     onclick: options.onClick,
@@ -58,7 +67,7 @@ export function button(options: ButtonOptions): HTMLButtonElement {
     span.innerHTML = options.icon;
     element.append(span.firstElementChild ?? span);
   }
-  if (options.label) element.append(document.createTextNode(options.label));
+  if (options.label) element.append(document.createTextNode(t(options.label)));
   if (options.shortcut) {
     element.append(h("span", { class: "shortcut", text: options.shortcut }));
   }

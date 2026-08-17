@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+
+Sitemap: https://axdraw.sjshin.workers.dev/sitemap.xml

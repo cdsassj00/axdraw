@@ -413,7 +413,9 @@ try {
   await page.keyboard.type("마름모");
   await page.waitForTimeout(120);
   const koResults = await page.evaluate(() =>
-    [...document.querySelectorAll(".cp-row .cp-label")].map((node) => node.textContent),
+    // The primary label is localised; the Korean name sits in whichever of
+    // the two spans the locale didn't claim, so check both.
+    [...document.querySelectorAll(".cp-row .cp-label, .cp-row .cp-sub")].map((node) => node.textContent),
   );
   check("the palette matches Korean labels", koResults.includes("마름모"), JSON.stringify(koResults));
 

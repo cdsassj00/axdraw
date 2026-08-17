@@ -12,6 +12,7 @@ import { DEFAULT_STYLE } from "../constants";
 import { newLinearElement, newShapeElement, newTextElement } from "../element/factory";
 import type { AxElement, ItemStyle } from "../types";
 import { h } from "./dom";
+import { t } from "../i18n";
 
 function style(overrides: Partial<ItemStyle> = {}): ItemStyle {
   return { ...DEFAULT_STYLE, ...overrides };
@@ -67,42 +68,42 @@ const PASTELS = { blue: "#a5d8ff", green: "#b2f2bb", yellow: "#ffec99", red: "#f
 
 const TEMPLATES: Template[] = [
   {
-    name: "플로우차트",
-    description: "시작 → 처리 → 판단 분기",
+    name: "Flowchart",
+    description: "Start → process → decision",
     emoji: "🔀",
     build: () => [
       shape("ellipse", 40, 0, 160, 64, { backgroundColor: PASTELS.green, fillStyle: "solid" }),
-      label("시작", 120, 32),
+      label(t("Start"), 120, 32),
       connector("arrow", 120, 68, 120, 128),
       shape("rectangle", 30, 132, 180, 64, { backgroundColor: PASTELS.blue, fillStyle: "solid" }),
-      label("처리", 120, 164),
+      label(t("Process"), 120, 164),
       connector("arrow", 120, 200, 120, 260),
       shape("diamond", 20, 264, 200, 96, { backgroundColor: PASTELS.yellow, fillStyle: "solid" }),
-      label("판단?", 120, 312),
+      label(t("Decision?"), 120, 312),
       connector("arrow", 120, 364, 120, 424),
-      label("예", 138, 394, 16),
+      label(t("Yes"), 138, 394, 16),
       shape("ellipse", 40, 428, 160, 64, { backgroundColor: PASTELS.red, fillStyle: "solid" }),
-      label("끝", 120, 460),
+      label(t("End"), 120, 460),
       connector("arrow", 224, 312, 320, 312),
-      label("아니오", 272, 292, 16),
+      label(t("No"), 272, 292, 16),
       shape("rectangle", 324, 280, 170, 64, { backgroundColor: PASTELS.blue, fillStyle: "solid" }),
-      label("다시 처리", 409, 312),
+      label(t("Process again"), 409, 312),
     ],
   },
   {
-    name: "마인드맵",
-    description: "중심 주제와 가지 4개",
+    name: "Mind map",
+    description: "Central topic with 4 branches",
     emoji: "🧠",
     build: () => {
       const elements: AxElement[] = [
         shape("ellipse", 200, 130, 200, 90, { backgroundColor: PASTELS.yellow, fillStyle: "solid" }),
-        label("주제", 300, 175, 24),
+        label(t("Topic"), 300, 175, 24),
       ];
       const branches: [string, number, number, string][] = [
-        ["아이디어 1", 0, 0, PASTELS.blue],
-        ["아이디어 2", 440, 0, PASTELS.green],
-        ["아이디어 3", 0, 300, PASTELS.green],
-        ["아이디어 4", 440, 300, PASTELS.blue],
+        [`${t("Idea")} 1`, 0, 0, PASTELS.blue],
+        [`${t("Idea")} 2`, 440, 0, PASTELS.green],
+        [`${t("Idea")} 3`, 0, 300, PASTELS.green],
+        [`${t("Idea")} 4`, 440, 300, PASTELS.blue],
       ];
       for (const [text, x, y, color] of branches) {
         elements.push(shape("rectangle", x, y, 160, 56, { backgroundColor: color, fillStyle: "solid" }));
@@ -116,14 +117,14 @@ const TEMPLATES: Template[] = [
     },
   },
   {
-    name: "칸반 보드",
-    description: "할 일 · 진행 중 · 완료",
+    name: "Kanban board",
+    description: "To do · Doing · Done",
     emoji: "📋",
     build: () => {
       const columns: [string, string][] = [
-        ["할 일", PASTELS.red],
-        ["진행 중", PASTELS.yellow],
-        ["완료", PASTELS.green],
+        [t("To do"), PASTELS.red],
+        [t("Doing"), PASTELS.yellow],
+        [t("Done"), PASTELS.green],
       ];
       const elements: AxElement[] = [];
       columns.forEach(([title, color], index) => {
@@ -132,23 +133,23 @@ const TEMPLATES: Template[] = [
         elements.push(shape("rectangle", x + 10, 12, 200, 44, { backgroundColor: color, fillStyle: "solid" }));
         elements.push(label(title, x + 110, 34, 18));
         elements.push(shape("rectangle", x + 10, 72, 200, 60));
-        elements.push(label("카드", x + 110, 102, 16));
+        elements.push(label(t("Card"), x + 110, 102, 16));
       });
       return elements;
     },
   },
   {
-    name: "4분면",
-    description: "SWOT · 중요도/긴급도",
+    name: "Quadrant",
+    description: "SWOT · priority matrix",
     emoji: "🧭",
     build: () => [
       shape("rectangle", 0, 0, 520, 400),
       connector("line", 260, 0, 260, 400),
       connector("line", 0, 200, 520, 200),
-      label("1. 중요 · 긴급", 130, 100, 18),
-      label("2. 중요 · 여유", 390, 100, 18),
-      label("3. 위임", 130, 300, 18),
-      label("4. 제거", 390, 300, 18),
+      label(t("1. Important · Urgent"), 130, 100, 18),
+      label(t("2. Important · Later"), 390, 100, 18),
+      label(t("3. Delegate"), 130, 300, 18),
+      label(t("4. Drop"), 390, 300, 18),
     ],
   },
 ];
@@ -179,8 +180,8 @@ export function openTemplateDialog(app: App): void {
       },
       [
         h("div", { class: "tpl-emoji", text: template.emoji }),
-        h("div", { class: "tpl-name", text: template.name }),
-        h("div", { class: "tpl-desc", text: template.description }),
+        h("div", { class: "tpl-name", text: t(template.name) }),
+        h("div", { class: "tpl-desc", text: t(template.description) }),
       ],
     ),
   );
@@ -188,8 +189,8 @@ export function openTemplateDialog(app: App): void {
   backdrop.append(
     h("div", { class: "modal island", style: { width: "min(560px, 100%)" } }, [
       h("div", { class: "modal-header" }, [
-        h("h2", { text: "템플릿" }),
-        h("button", { class: "secondary-btn", type: "button", text: "닫기", onclick: close }),
+        h("h2", { text: t("Templates") }),
+        h("button", { class: "secondary-btn", type: "button", text: t("Close"), onclick: close }),
       ]),
       h("div", { class: "tpl-grid" }, cards),
     ]),

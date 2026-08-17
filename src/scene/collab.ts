@@ -18,6 +18,7 @@
 import type { App } from "../app";
 import type { AxElement, BinaryFiles } from "../types";
 import { randomId } from "../utils/random";
+import { t } from "../i18n";
 import { decryptJson, encryptJson, fromBase64Url, generateKeyBytes, importAesKey, toBase64Url } from "./crypto";
 import { API_BASE } from "./share";
 
@@ -168,13 +169,13 @@ export class CollabSession {
         this.updateCursor(message.from, message.x, message.y);
         break;
       case "hello":
-        this.app.onMessage?.("A collaborator joined");
+        this.app.onMessage?.(t("A collaborator joined"));
         this.sentFileIds.clear(); // Newcomers need the images too.
         void this.broadcastScene();
         break;
       case "bye":
         this.removeCursor(message.from);
-        this.app.onMessage?.("A collaborator left");
+        this.app.onMessage?.(t("A collaborator left"));
         break;
     }
   }

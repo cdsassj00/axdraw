@@ -17,6 +17,7 @@
 
 import type { App } from "../app";
 import { h } from "./dom";
+import { locale, t } from "../i18n";
 
 export interface Command {
   id: string;
@@ -125,7 +126,7 @@ function rank(app: App, query: string): Command[] {
   const scored: { command: Command; score: number }[] = [];
   for (const command of available) {
     const best = Math.min(
-      ...[score(command.label, query), score(command.ko, query), score(command.group, query)]
+      ...[score(command.label, query), score(command.ko, query), score(t(command.label), query), score(command.group, query)]
         .filter((value) => value >= 0)
         .concat(Infinity),
     );
@@ -195,8 +196,8 @@ export function createCommandPalette(app: App, parent: HTMLElement): () => void 
             onclick: () => runCommand(command),
           },
           [
-            h("span", { class: "cp-label" }, [command.ko]),
-            h("span", { class: "cp-sub" }, [command.label]),
+            h("span", { class: "cp-label" }, [locale === "ko" ? command.ko : t(command.label)]),
+            h("span", { class: "cp-sub" }, [locale === "ko" ? command.label : command.ko]),
             command.shortcut ? h("kbd", { class: "cp-kbd" }, [command.shortcut]) : null,
           ],
         ),

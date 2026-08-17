@@ -134,6 +134,7 @@ import {
 } from "./scene/storage";
 import { createShareLink, loadSharedScene } from "./scene/share";
 import { CollabSession, ROOM_HASH_PATTERN } from "./scene/collab";
+import { t } from "./i18n";
 import type {
   AppState,
   AxElement,
@@ -2566,7 +2567,7 @@ export class App {
     saveScene(this.elements, this.files, this.state);
     const board = createBoard();
     this.openBoard(board.id);
-    this.onMessage?.(`${board.name} — 새 캔버스`);
+    this.onMessage?.(board.name);
   }
 
   /** Saves the current board and switches to another. */
@@ -2591,7 +2592,7 @@ export class App {
   deleteBoard(id: string): void {
     const boards = listBoards();
     if (boards.length <= 1) {
-      this.onError?.("마지막 캔버스는 삭제할 수 없습니다");
+      this.onError?.(t("The last canvas cannot be deleted"));
       return;
     }
     deleteBoard(id);
@@ -2623,13 +2624,13 @@ export class App {
   /** Uploads the encrypted scene and puts a share URL on the clipboard. */
   async shareLink(): Promise<void> {
     if (!this.elements.some((element) => !element.isDeleted)) {
-      this.onError?.("Nothing to share");
+      this.onError?.(t("Nothing to share"));
       return;
     }
     try {
       const url = await createShareLink(this.elements, this.files, this.state);
       await navigator.clipboard.writeText(url);
-      this.onMessage?.("Share link copied to clipboard");
+      this.onMessage?.(t("Share link copied to clipboard"));
     } catch (error) {
       this.onError?.(error instanceof Error ? error.message : "Sharing failed");
     }
@@ -2650,7 +2651,7 @@ export class App {
         this.collab = await CollabSession.create(this);
       }
       await navigator.clipboard.writeText(this.collab.url);
-      this.onMessage?.("Collaboration link copied — anyone with it can draw with you");
+      this.onMessage?.(t("Collaboration link copied — anyone with it can draw with you"));
     } catch (error) {
       this.onError?.(error instanceof Error ? error.message : "Could not start collaboration");
     }
@@ -2659,7 +2660,7 @@ export class App {
   stopCollab(): void {
     this.collab?.destroy();
     this.collab = null;
-    this.onMessage?.("Left the collaboration room");
+    this.onMessage?.(t("Left the collaboration room"));
   }
 
   /** Joins a room when the page was opened through a #room=… link. */
@@ -2668,7 +2669,7 @@ export class App {
     if (!match || this.collab) return;
     try {
       this.collab = await CollabSession.join(this, match[1], match[2]);
-      this.onMessage?.("Joined the collaboration room");
+      this.onMessage?.(t("Joined the collaboration room"));
     } catch (error) {
       this.onError?.(error instanceof Error ? error.message : "Could not join the room");
     }
@@ -2722,7 +2723,7 @@ export class App {
       this.history.reset(this.elements, this.state.selectedIds);
       this.zoomToFit();
       this.commit();
-      this.onMessage?.("Opened a shared drawing");
+      this.onMessage?.(t("Opened a shared drawing"));
     } catch (error) {
       this.onError?.(error instanceof Error ? error.message : "Could not load the shared scene");
     }
