@@ -103,7 +103,7 @@ export function createUI(app: App): void {
   creditLink.textContent = CREDIT_LABEL;
   credit.appendChild(creditLink);
   const aboutLink = document.createElement("a");
-  aboutLink.href = "about.html";
+  aboutLink.href = "about";
   aboutLink.target = "_blank";
   aboutLink.textContent = "소개";
   credit.appendChild(aboutLink);
