@@ -19,6 +19,7 @@ import type { Arrowhead, AxElement, FontFamily, ItemStyle, ToolType } from "../t
 import { openConfirmDialog, openExportDialog, openHelpDialog, showToast } from "./dialogs";
 import { COFFEE_URL, CREDIT_LABEL, CREDIT_URL } from "../constants";
 import { openTemplateDialog } from "./templates";
+import { openAiDrawDialog } from "./aiDraw";
 import { LOCALE_NAMES, locale, setLocale, t, type Locale } from "../i18n";
 import { button, dismissable, h } from "./dom";
 import { iconEl } from "./icons";
@@ -183,6 +184,13 @@ export function createUI(app: App): void {
           className: "btn--wide",
           title: "Templates",
           onClick: () => openTemplateDialog(app),
+        }),
+        button({
+          icon: iconEl("wand"),
+          label: "AI",
+          className: "btn--wide",
+          title: t("Draw with AI"),
+          onClick: () => openAiDrawDialog(app),
         }),
       ]),
     );

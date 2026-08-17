@@ -115,6 +115,90 @@ export default {
         });
       }
 
+      // In-site AI drawing: proxy a prompt to a cheap chat model and return
+      // an element spec the client turns into shapes. The key lives only in
+      // a Worker secret — GROQ_API_KEY or OPENROUTER_API_KEY (Groq wins if
+      // both are set); AI_MODEL optionally overrides the default model.
+      if (url.pathname === "/api/ai/draw" && request.method === "POST") {
+        const provider = env.GROQ_API_KEY
+          ? {
+              url: "https://api.groq.com/openai/v1/chat/completions",
+              key: env.GROQ_API_KEY,
+              model: env.AI_MODEL || "llama-3.3-70b-versatile",
+            }
+          : env.OPENROUTER_API_KEY
+            ? {
+                url: "https://openrouter.ai/api/v1/chat/completions",
+                key: env.OPENROUTER_API_KEY,
+                model: env.AI_MODEL || "openai/gpt-4o-mini",
+              }
+            : null;
+        if (!provider) return json({ error: "AI is not configured" }, 501);
+
+        const { prompt } = await request.json().catch(() => ({}));
+        if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 600) {
+          return json({ error: "invalid prompt" }, 400);
+        }
+
+        const system = [
+          "You lay out diagrams for a hand-drawn whiteboard. Reply with ONLY a JSON object:",
+          '{"elements": [ ... ]}. Each element:',
+          '{"type":"rectangle"|"ellipse"|"diamond"|"arrow"|"line"|"text",',
+          ' "x":number, "y":number, "width":number, "height":number,',
+          ' "label":"centred text on a shape (optional)",',
+          ' "text":"content, only for type=text",',
+          ' "points":[[0,0],[dx,dy],...] relative to (x,y), only for arrow/line,',
+          ' "strokeColor":"#hex", "backgroundColor":"#hex fill for shapes",',
+          ' "fontSize":number, "angle":radians (all optional)}',
+          "Coordinates: y grows downward; keep the drawing within roughly 900x650 starting near (0,0).",
+          "Shapes are typically 140-200 wide and 60-90 tall; leave 40-80px gaps; connect flow steps with arrows.",
+          "Pleasant pastel fills: #a5d8ff blue, #b2f2bb green, #ffec99 yellow, #ffc9c9 red, #d0bfff purple.",
+          "Write labels in the same language as the user's request. Maximum 60 elements. JSON only, no prose.",
+        ].join("\n");
+
+        const upstream = await fetch(provider.url, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${provider.key}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model: provider.model,
+            temperature: 0.4,
+            max_tokens: 4000,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: prompt },
+            ],
+          }),
+        });
+        if (!upstream.ok) {
+          const detail = await upstream.text();
+          return json({ error: `AI request failed (${upstream.status})`, detail: detail.slice(0, 300) }, 502);
+        }
+        const completion = await upstream.json();
+        const content = completion.choices?.[0]?.message?.content ?? "";
+        let parsed;
+        try {
+          parsed = JSON.parse(content);
+        } catch {
+          // Some models wrap the JSON in a code fence despite instructions.
+          const inner = /\{[\s\S]*\}/.exec(content);
+          if (!inner) return json({ error: "AI returned no JSON" }, 502);
+          try {
+            parsed = JSON.parse(inner[0]);
+          } catch {
+            return json({ error: "AI returned invalid JSON" }, 502);
+          }
+        }
+        const elements = Array.isArray(parsed) ? parsed : parsed.elements;
+        if (!Array.isArray(elements) || !elements.length) {
+          return json({ error: "AI returned no elements" }, 502);
+        }
+        return json({ elements: elements.slice(0, 60) });
+      }
+
       const room = /^\/api\/rooms\/([A-Za-z0-9]+)\/ws$/.exec(url.pathname);
       if (room) {
         return env.ROOMS.get(env.ROOMS.idFromName(room[1])).fetch(request);
