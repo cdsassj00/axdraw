@@ -195,6 +195,18 @@ export function createUI(app: App): void {
     );
 
     topRight.replaceChildren(
+      ...(COFFEE_URL
+        ? [
+            h("a", {
+              class: "coffee-btn",
+              href: COFFEE_URL,
+              target: "_blank",
+              rel: "noopener",
+              title: "☕ 커피 한 잔 후원",
+              text: "☕",
+            }),
+          ]
+        : []),
       h("button", {
         class: "primary-btn share-btn",
         type: "button",

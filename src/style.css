@@ -244,6 +244,24 @@ body {
   box-shadow: var(--shadow);
 }
 
+.coffee-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #d4af37, #f5d76e);
+  box-shadow: var(--shadow);
+  font-size: 17px;
+  text-decoration: none;
+  transition: transform 120ms ease;
+}
+
+.coffee-btn:hover {
+  transform: scale(1.08);
+}
+
 .top-left {
   position: absolute;
   top: 12px;
