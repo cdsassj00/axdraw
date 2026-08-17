@@ -37,6 +37,47 @@ function json(data, status = 200) {
   });
 }
 
+/**
+ * A collaboration room: relays every WebSocket frame to all other sockets in
+ * the same room. Frames are opaque encrypted bytes (the key never leaves the
+ * clients' URL fragments), so the room needs no logic beyond fan-out. Uses
+ * the hibernation API so idle rooms cost nothing.
+ */
+export class Room {
+  constructor(state) {
+    this.state = state;
+  }
+
+  async fetch(request) {
+    if (request.headers.get("Upgrade") !== "websocket") {
+      return new Response("Expected a WebSocket", { status: 426 });
+    }
+    const pair = new WebSocketPair();
+    this.state.acceptWebSocket(pair[1]);
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  webSocketMessage(ws, message) {
+    for (const peer of this.state.getWebSockets()) {
+      if (peer !== ws) {
+        try {
+          peer.send(message);
+        } catch {
+          // A peer mid-disconnect; it will be reaped by the runtime.
+        }
+      }
+    }
+  }
+
+  webSocketClose(ws) {
+    try {
+      ws.close();
+    } catch {
+      // Already closed.
+    }
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -44,6 +85,11 @@ export default {
     if (url.pathname.startsWith("/api/")) {
       if (request.method === "OPTIONS") {
         return new Response(null, { status: 204, headers: CORS_HEADERS });
+      }
+
+      const room = /^\/api\/rooms\/([A-Za-z0-9]+)\/ws$/.exec(url.pathname);
+      if (room) {
+        return env.ROOMS.get(env.ROOMS.idFromName(room[1])).fetch(request);
       }
 
       if (url.pathname === "/api/scenes" && request.method === "POST") {

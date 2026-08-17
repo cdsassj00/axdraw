@@ -17,3 +17,13 @@ run_worker_first = ["/api/*"]
 [[kv_namespaces]]
 binding = "SCENES"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+# Live-collaboration rooms. No extra setup — the migration below creates the
+# class on first deploy.
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]

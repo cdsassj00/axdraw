@@ -16,25 +16,12 @@
  */
 
 import type { AppState, AxElement, BinaryFiles } from "../types";
+import { encryptBytes, decryptBytes, fromBase64Url, generateKeyBytes, importAesKey, toBase64Url } from "./crypto";
 import { parseScene, serializeScene, type ParsedScene } from "./export";
 
-const API_BASE: string = import.meta.env.VITE_SHARE_API ?? "";
+export const API_BASE: string = import.meta.env.VITE_SHARE_API ?? "";
 
 const HASH_PATTERN = /^#share=([A-Za-z0-9]+),([A-Za-z0-9_-]+)$/;
-
-function toBase64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function fromBase64Url(text: string): Uint8Array<ArrayBuffer> {
-  const base64 = text.replace(/-/g, "+").replace(/_/g, "/");
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
 
 /** Encrypts the scene, uploads it, and returns the full share URL. */
 export async function createShareLink(
@@ -44,17 +31,9 @@ export async function createShareLink(
 ): Promise<string> {
   const json = serializeScene(elements, files, state);
 
-  const keyBytes = crypto.getRandomValues(new Uint8Array(16));
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
-  const ciphertext = new Uint8Array(
-    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(json)),
-  );
-
-  // iv ‖ ciphertext in one opaque body — the server never parses it.
-  const body = new Uint8Array(iv.length + ciphertext.length);
-  body.set(iv, 0);
-  body.set(ciphertext, iv.length);
+  const keyBytes = generateKeyBytes();
+  const key = await importAesKey(keyBytes, ["encrypt"]);
+  const body = await encryptBytes(key, new TextEncoder().encode(json));
 
   const response = await fetch(`${API_BASE}/api/scenes`, {
     method: "POST",
@@ -82,11 +61,8 @@ export async function loadSharedScene(): Promise<ParsedScene | null> {
   if (!response.ok) {
     throw new Error(response.status === 404 ? "This share link has expired or does not exist" : "Could not load the shared scene");
   }
-  const buffer = await response.arrayBuffer();
-  const iv = new Uint8Array(buffer, 0, 12);
-  const ciphertext = new Uint8Array(buffer, 12);
-  const key = await crypto.subtle.importKey("raw", fromBase64Url(keyText), "AES-GCM", false, ["decrypt"]);
-  const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+  const key = await importAesKey(fromBase64Url(keyText), ["decrypt"]);
+  const plaintext = await decryptBytes(key, await response.arrayBuffer());
   const scene = parseScene(new TextDecoder().decode(plaintext));
 
   history.replaceState(null, "", location.pathname + location.search);
