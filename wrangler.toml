@@ -6,6 +6,8 @@
 #
 name = "axdraw"
 main = "worker/index.js"
+# Dashboard-added variables (e.g. GROQ_API_KEY) survive CI deploys.
+keep_vars = true
 compatibility_date = "2026-08-01"
 
 [assets]
