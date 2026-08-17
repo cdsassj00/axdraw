@@ -57,6 +57,7 @@ export const COMMANDS: Command[] = [
   { id: "edit.ungroup", label: "Ungroup", ko: "그룹 해제", group: "편집", shortcut: "Ctrl+Shift+G", run: (a) => a.ungroup(), enabled: hasSelection },
   { id: "edit.lock", label: "Toggle lock", ko: "잠금 전환", group: "편집", run: (a) => a.toggleLock(), enabled: hasSelection },
   { id: "edit.unlockAll", label: "Unlock all", ko: "전체 잠금 해제", group: "편집", run: (a) => a.unlockAll() },
+  { id: "edit.convertShape", label: "Convert stroke to shape", ko: "도형으로 변환", group: "편집", run: (a) => a.convertSelectedFreedraw(), enabled: (a) => a.getSelectedElements().some((e) => e.type === "freedraw") },
 
   // Arrange
   { id: "z.front", label: "Bring to front", ko: "맨 앞으로", group: "정렬", shortcut: "Ctrl+Shift+]", run: (a) => a.changeZ("front"), enabled: hasSelection },

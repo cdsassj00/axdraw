@@ -343,9 +343,12 @@ export function createUI(app: App): void {
         section("Font family", [
           optionRow(
             [
-              { value: "hand", label: "✎", title: "Hand-drawn" },
-              { value: "normal", label: "A", title: "Normal" },
+              { value: "hand", label: "✎", title: "Hand-drawn (Caveat · Gaegu)" },
+              { value: "normal", label: "A", title: "Normal (system)" },
               { value: "code", label: "</>", title: "Code" },
+              { value: "pretendard", label: "Pr", title: "Pretendard" },
+              { value: "noto", label: "노", title: "Noto Sans KR" },
+              { value: "serif", label: "明", title: "Noto Serif KR" },
             ],
             style.fontFamily,
             (value) => app.setStyle({ fontFamily: value as FontFamily }),
@@ -829,6 +832,12 @@ function openContextMenu(
       menuItem("sendToBack", "Send to back", "Ctrl+Shift+[", run(() => app.changeZ("back"))),
       h("div", { class: "dropdown-separator" }),
     );
+    if (selected.some((element: AxElement) => element.type === "freedraw")) {
+      menu.append(
+        menuItem("wand", "Convert to shape", null, run(() => app.convertSelectedFreedraw())),
+        h("div", { class: "dropdown-separator" }),
+      );
+    }
     if (selected.length > 1) {
       menu.append(menuItem("group", "Group selection", "Ctrl+G", run(() => app.group())));
     }

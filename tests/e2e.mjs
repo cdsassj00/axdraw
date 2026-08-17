@@ -55,6 +55,10 @@ try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
   page.on("console", (message) => {
+    // Web fonts come from CDNs; the test sandbox is offline and the app is
+    // built to degrade to fallback stacks, so those load failures are noise.
+    const url = message.location()?.url ?? "";
+    if (/fonts\.googleapis|fonts\.gstatic|cdn\.jsdelivr/.test(url)) return;
     if (message.type() === "error") errors.push(message.text());
   });
 
@@ -224,6 +228,11 @@ try {
 
   /* ---------------- shape recognition ---------------- */
 
+  // Assist ships off by default (the pen stays freehand); these tests cover
+  // the recognition path, so switch it on.
+  await page.evaluate(() => {
+    window.axdraw.state.shapeRecognition = true;
+  });
   await resetView();
   let result = await sketch([[400, 150], [500, 153], [600, 149], [700, 152]]);
   check("a rough stroke becomes a straight line", result.type === "line" && result.points === 2, JSON.stringify(result));
