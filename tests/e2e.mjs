@@ -363,6 +363,83 @@ try {
   });
   check("object snapping aligns edges", snapped.a === snapped.b, JSON.stringify(snapped));
 
+  // Regression: Enter and Escape were the only ways out of multi-point mode.
+  // Clicking again just extended the line, so a user trying to finish kept
+  // adding segments — which is how a "straight line" ends up a long wandering
+  // curve. The second click of a double-click lands on the point the first one
+  // placed, and that now ends the line.
+  await resetView();
+  await page.keyboard.press("l");
+  await page.mouse.click(400, 500);
+  await page.mouse.click(550, 560);
+  await page.mouse.click(700, 470);
+  await page.mouse.dblclick(700, 470);
+  await page.waitForTimeout(120);
+  const afterDouble = await page.evaluate(() => {
+    const line = window.axdraw.elements.filter((element) => !element.isDeleted).pop();
+    return { type: line?.type, points: line?.points?.length ?? 0 };
+  });
+  // Moving away would extend the line if it were still being placed.
+  await page.mouse.move(950, 650);
+  await page.waitForTimeout(120);
+  const settled = await page.evaluate(() => {
+    const line = window.axdraw.elements.filter((element) => !element.isDeleted).pop();
+    return line?.points?.length ?? 0;
+  });
+  check(
+    "double-click finishes a multi-point line",
+    afterDouble.type === "line" && afterDouble.points === 3 && settled === afterDouble.points,
+    JSON.stringify({ ...afterDouble, settled }),
+  );
+
+  /* ---------------- canvas naming ---------------- */
+
+  const nameField = ".board-name-input";
+  const originalName = await page.$eval(nameField, (node) => node.value);
+  await page.click(nameField);
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("강의 1주차");
+  // Tool shortcuts live on window; typing in the name must not reach them.
+  const toolWhileTyping = await page.evaluate(() => window.axdraw.state.tool);
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(120);
+  const renamed = await page.evaluate(() => ({
+    name: window.axdraw.currentBoardName(),
+    stored: JSON.parse(localStorage.getItem("axdraw:boards") || "[]").map((board) => board.name),
+  }));
+  check(
+    "the canvas can be renamed in place and is saved",
+    renamed.name === "강의 1주차" && renamed.stored.includes("강의 1주차") && toolWhileTyping !== "line",
+    JSON.stringify({ ...renamed, toolWhileTyping }),
+  );
+
+  await page.click(nameField);
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("   ");
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(120);
+  check(
+    "a blank canvas name is rejected",
+    (await page.evaluate(() => window.axdraw.currentBoardName())) === "강의 1주차",
+    await page.evaluate(() => window.axdraw.currentBoardName()),
+  );
+
+  await page.click(nameField);
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("버리는 이름");
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(120);
+  check(
+    "Escape abandons a name edit",
+    (await page.evaluate(() => window.axdraw.currentBoardName())) === "강의 1주차",
+    await page.evaluate(() => window.axdraw.currentBoardName()),
+  );
+  await page.evaluate(
+    (name) => window.axdraw.renameBoard(window.axdraw.currentBoardId(), name),
+    originalName,
+  );
+
+
   /* ---------------- command palette ---------------- */
 
   await resetView();

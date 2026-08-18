@@ -177,6 +177,7 @@ export function createUI(app: App): void {
           },
         }),
         h("span", { class: "brand", text: "axdraw" }),
+        boardNameField(app),
       ]),
       h("div", { class: "island", style: { padding: "6px" } }, [
         button({
@@ -895,6 +896,49 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
   const dispose = dismissable(menu, close);
 }
 
+/**
+ * The current canvas name, editable in place.
+ *
+ * A board's name is the only thing distinguishing it in the picker, and the
+ * picker is the only place it could be set — which meant the name of the
+ * canvas you are actually looking at was invisible. Editing commits on blur or
+ * Enter; Escape puts the old name back, so an abandoned edit costs nothing.
+ */
+function boardNameField(app: App): HTMLElement {
+  const name = app.currentBoardName();
+  const input = h("input", {
+    class: "board-name-input",
+    type: "text",
+    value: name,
+    title: t("Rename this canvas"),
+    "aria-label": t("Canvas name"),
+    spellcheck: "false",
+  }) as HTMLInputElement;
+
+  const commit = () => {
+    if (input.value.trim() === name) return;
+    // Reject-blank lives in the app; mirror its decision back into the field
+    // so a cleared box does not sit there looking like it saved.
+    app.renameBoard(app.currentBoardId(), input.value);
+    input.value = app.currentBoardName();
+  };
+
+  input.addEventListener("keydown", (event) => {
+    // The canvas listens on window for single-key tool shortcuts, so every
+    // keystroke here has to stop before it reaches that handler.
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      commit();
+      input.blur();
+    } else if (event.key === "Escape") {
+      input.value = name;
+      input.blur();
+    }
+  });
+  input.addEventListener("blur", commit);
+  return input;
+}
+
 /** Boards — every canvas saved in this browser, newest first. */
 function openBoardsDialog(app: App): void {
   const backdrop = h("div", { class: "modal-backdrop" });
@@ -929,6 +973,18 @@ function openBoardsDialog(app: App): void {
               h("span", { class: "board-date", text: new Date(board.updated).toLocaleString() }),
             ],
           ),
+          h("button", {
+            class: "secondary-btn board-rename",
+            type: "button",
+            text: t("Rename"),
+            title: t("Rename this canvas"),
+            onclick: () => {
+              const next = window.prompt(t("Canvas name"), board.name);
+              if (next === null) return;
+              app.renameBoard(board.id, next);
+              renderRows();
+            },
+          }),
           h("button", {
             class: "secondary-btn board-delete",
             type: "button",

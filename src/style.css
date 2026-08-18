@@ -269,6 +269,12 @@ body {
   display: flex;
   gap: 8px;
   align-items: flex-start;
+  /* The promo banner is pinned top-centre, so this row cannot grow into the
+     middle of the window. Wrap instead: an island that no longer fits drops to
+     a second row rather than sliding underneath the banner where its buttons
+     stop being clickable. */
+  flex-wrap: wrap;
+  max-width: calc(50vw - 250px);
 }
 
 .top-right {
@@ -1354,4 +1360,35 @@ input[type="range"] {
   .cp-backdrop {
     backdrop-filter: none;
   }
+}
+
+/* Canvas name, edited in place in the top-left island. Sized to its content
+   rather than a fixed width so a short name does not leave a wide empty box
+   sitting next to the wordmark. */
+.board-name-input {
+  width: 9ch;
+  min-width: 5ch;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-overflow: ellipsis;
+}
+
+.board-name-input:hover {
+  border-color: var(--island-border);
+}
+
+.board-name-input:focus {
+  width: 14ch;
+  border-color: var(--accent);
+  background: var(--button-hover);
+  outline: none;
+}
+
+.board-row .board-rename {
+  white-space: nowrap;
 }

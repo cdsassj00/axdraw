@@ -129,6 +129,7 @@ import {
   deleteBoard,
   listBoards,
   loadScene,
+  renameBoard,
   saveScene,
   setCurrentBoard,
   type BoardMeta,
@@ -1657,10 +1658,23 @@ export class App {
     const last = points[points.length - 1];
     const first = points[0];
 
+    // Clicking the point just placed finishes the line. This is what makes a
+    // double-click end it: the second click lands on the point the first one
+    // dropped. Without it the only way out was Enter or Escape, and clicking
+    // again just extended the line -- so a user trying to finish kept adding
+    // segments instead.
+    const threshold = LINE_CONFIRM_THRESHOLD / this.state.zoom;
+    if (points.length > 2) {
+      const previous = points[points.length - 2];
+      if (Math.hypot(last[0] - previous[0], last[1] - previous[1]) < threshold) {
+        this.finishMultiPoint();
+        return;
+      }
+    }
+
     // Clicking near the first point closes the shape and finishes.
     const closes =
-      points.length > 2 &&
-      Math.hypot(last[0] - first[0], last[1] - first[1]) < LINE_CONFIRM_THRESHOLD / this.state.zoom;
+      points.length > 2 && Math.hypot(last[0] - first[0], last[1] - first[1]) < threshold;
     if (closes) {
       const closed = points.map((point) => [...point] as [number, number]);
       closed[closed.length - 1] = [first[0], first[1]];
@@ -1767,6 +1781,14 @@ export class App {
 
   private handleDoubleClick = (event: MouseEvent): void => {
     if (this.state.viewMode) return;
+    // A double-click while placing a multi-point line means "done". The click
+    // handler usually catches this first (the second click lands on the point
+    // the first dropped), but a double-click that drifts a few pixels would
+    // otherwise fall through to hit-testing and start editing text instead.
+    if (this.multiPointElement) {
+      this.finishMultiPoint();
+      return;
+    }
     const scene = this.clientToScene(event.clientX, event.clientY);
     const threshold = HIT_THRESHOLD / this.state.zoom;
     const hit = getElementAtPosition(this.elements, scene, threshold);
@@ -2672,6 +2694,25 @@ export class App {
 
   currentBoardId(): string {
     return currentBoardId();
+  }
+
+  /** Name of the canvas currently open, for the title chip. */
+  currentBoardName(): string {
+    const id = currentBoardId();
+    return listBoards().find((board) => board.id === id)?.name ?? "";
+  }
+
+  /**
+   * Rename a canvas. Blank names are rejected rather than stored: the name is
+   * the only handle the user has on a board in the picker, and an empty row
+   * cannot be told apart from its neighbours.
+   */
+  renameBoard(id: string, name: string): void {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (trimmed === listBoards().find((board) => board.id === id)?.name) return;
+    renameBoard(id, trimmed);
+    this.notify();
   }
 
   /** Saves the current board and opens a fresh empty one. */

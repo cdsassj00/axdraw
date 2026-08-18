@@ -97,6 +97,7 @@ const ko: Dict = {
   "Quadrant": "4분면", "SWOT · priority matrix": "SWOT · 중요도/긴급도",
   // Boards
   "Boards": "캔버스", "+ New canvas": "+ 새 캔버스",
+  "Rename": "이름 변경", "Rename this canvas": "이 캔버스 이름 변경", "Canvas name": "캔버스 이름",
   "The last canvas cannot be deleted": "마지막 캔버스는 삭제할 수 없습니다",
   // Template contents
   "Start": "시작", "Process": "처리", "Decision?": "판단?", "End": "끝", "Yes": "예", "No": "아니오",
@@ -151,6 +152,7 @@ const ja: Dict = {
   "Kanban board": "カンバンボード", "To do · Doing · Done": "未着手 · 進行中 · 完了",
   "Quadrant": "4象限", "SWOT · priority matrix": "SWOT · 優先度マトリクス",
   "Boards": "キャンバス", "+ New canvas": "+ 新しいキャンバス",
+  "Rename": "名前を変更", "Rename this canvas": "このキャンバスの名前を変更", "Canvas name": "キャンバス名",
   "The last canvas cannot be deleted": "最後のキャンバスは削除できません",
   "Start": "開始", "Process": "処理", "Decision?": "判断?", "End": "終了", "Yes": "はい", "No": "いいえ",
   "Process again": "再処理", "Topic": "テーマ", "Idea": "アイデア",
@@ -204,6 +206,7 @@ const zh: Dict = {
   "Kanban board": "看板", "To do · Doing · Done": "待办 · 进行中 · 已完成",
   "Quadrant": "四象限", "SWOT · priority matrix": "SWOT · 优先级矩阵",
   "Boards": "画布", "+ New canvas": "+ 新建画布",
+  "Rename": "重命名", "Rename this canvas": "重命名此画布", "Canvas name": "画布名称",
   "The last canvas cannot be deleted": "最后一个画布无法删除",
   "Start": "开始", "Process": "处理", "Decision?": "判断?", "End": "结束", "Yes": "是", "No": "否",
   "Process again": "重新处理", "Topic": "主题", "Idea": "想法",
@@ -257,6 +260,7 @@ const fr: Dict = {
   "Kanban board": "Tableau kanban", "To do · Doing · Done": "À faire · En cours · Terminé",
   "Quadrant": "Quatre quadrants", "SWOT · priority matrix": "SWOT · matrice de priorité",
   "Boards": "Canevas", "+ New canvas": "+ Nouveau canevas",
+  "Rename": "Renommer", "Rename this canvas": "Renommer ce canevas", "Canvas name": "Nom du canevas",
   "The last canvas cannot be deleted": "Le dernier canevas ne peut pas être supprimé",
   "Start": "Début", "Process": "Traitement", "Decision?": "Décision ?", "End": "Fin", "Yes": "Oui", "No": "Non",
   "Process again": "Retraiter", "Topic": "Sujet", "Idea": "Idée",
