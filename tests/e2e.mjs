@@ -639,6 +639,60 @@ try {
   const offHandle = await cursorAt(560, 460);
   check("the resize cursor clears away from the handle", offHandle !== "nwse-resize", offHandle);
 
+  /* ---------------- stuck modifiers ---------------- */
+
+  // Modifiers are tracked from key events, so a key released while the page is
+  // not focused never reports going up. Alt-Tab away with Shift down and the
+  // editor thinks Shift is held forever: every shape comes out square and every
+  // line snaps to 45°, i.e. "everything I draw comes out diagonal".
+  await resetView();
+  await page.keyboard.down("Shift");
+  const heldModifiers = await page.evaluate(() => window.axdraw.shiftKey);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await page.waitForTimeout(60);
+  const afterBlur = await page.evaluate(() => ({
+    shift: window.axdraw.shiftKey,
+    alt: window.axdraw.altKey,
+    space: window.axdraw.spacePressed,
+  }));
+  await page.keyboard.up("Shift");
+  check(
+    "losing focus releases held modifiers",
+    heldModifiers && !afterBlur.shift && !afterBlur.alt && !afterBlur.space,
+    JSON.stringify({ heldModifiers, ...afterBlur }),
+  );
+
+  // Space is the pan modifier; stuck, it leaves the canvas permanently panning.
+  await page.keyboard.down("Space");
+  await page.waitForTimeout(60);
+  const spaceHeld = await page.evaluate(() => window.axdraw.spacePressed);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await page.waitForTimeout(60);
+  const spaceAfter = await page.evaluate(() => window.axdraw.spacePressed);
+  await page.keyboard.up("Space");
+  check("losing focus releases a held Space", spaceHeld && !spaceAfter, `${spaceHeld} -> ${spaceAfter}`);
+
+  // Shift must still constrain while it is genuinely down.
+  await resetView();
+  await page.keyboard.press("r");
+  await page.keyboard.down("Shift");
+  await drag([500, 350], [800, 450]);
+  await page.keyboard.up("Shift");
+  const constrained = (await scene()).last;
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([500, 350], [800, 450]);
+  const free = (await scene()).last;
+  check(
+    "Shift still constrains, and a plain drag does not",
+    Math.round(constrained.width) === Math.round(constrained.height) &&
+      Math.round(free.width) !== Math.round(free.height),
+    JSON.stringify({
+      shift: `${Math.round(constrained.width)}x${Math.round(constrained.height)}`,
+      plain: `${Math.round(free.width)}x${Math.round(free.height)}`,
+    }),
+  );
+
   /* ---------------- every button ---------------- */
 
   // Clicks every visible control in the chrome and checks the app survives it.

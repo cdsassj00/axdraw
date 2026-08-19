@@ -563,6 +563,16 @@ export class App {
 
     window.addEventListener("keydown", this.handleKeyDown);
     window.addEventListener("keyup", this.handleKeyUp);
+    // Modifiers are tracked from key events, and a key released while the page
+    // is not focused never sends one. Alt-Tab away with Shift down and the
+    // editor believes Shift is held for the rest of the session: every shape
+    // comes out square and every line snaps to 45°, which reads as "everything
+    // I draw comes out diagonal". Same for a stuck Space, which leaves the
+    // canvas in pan mode. Losing focus means we no longer know, so forget.
+    window.addEventListener("blur", this.releaseModifiers);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) this.releaseModifiers();
+    });
     window.addEventListener("resize", () => this.resize());
     window.addEventListener("paste", this.handlePaste);
     window.addEventListener("copy", this.handleCopyEvent);
@@ -1869,6 +1879,15 @@ export class App {
     }
     this.shiftKey = event.shiftKey;
     this.altKey = event.altKey;
+  };
+
+  /** Forget every held modifier. See the blur listener for why. */
+  private releaseModifiers = (): void => {
+    if (!this.shiftKey && !this.altKey && !this.spacePressed) return;
+    this.shiftKey = false;
+    this.altKey = false;
+    this.spacePressed = false;
+    this.updateCursor();
   };
 
   private handleKeyDown = (event: KeyboardEvent): void => {
