@@ -90,6 +90,7 @@ export const COMMANDS: Command[] = [
   { id: "file.png", label: "Export as PNG", ko: "PNG로 내보내기", group: "파일", run: (a) => void a.exportPng() },
   { id: "file.svg", label: "Export as SVG", ko: "SVG로 내보내기", group: "파일", run: (a) => a.exportSvg() },
   { id: "file.copyPng", label: "Copy image to clipboard", ko: "이미지 클립보드 복사", group: "파일", run: (a) => void a.copyPngToClipboard() },
+  { id: "file.copySvg", label: "Copy SVG to clipboard", ko: "SVG 클립보드 복사", group: "파일", run: (a) => void a.copySvgToClipboard() },
   { id: "file.share", label: "Share link", ko: "공유 링크", group: "파일", run: (a) => void a.shareLink() },
   { id: "collab.start", label: "Start live collaboration", ko: "실시간 협업 시작", group: "파일", run: (a) => void a.startCollab(), enabled: (a) => !a.collab },
   { id: "collab.stop", label: "Stop live collaboration", ko: "실시간 협업 종료", group: "파일", run: (a) => a.stopCollab(), enabled: (a) => !!a.collab },

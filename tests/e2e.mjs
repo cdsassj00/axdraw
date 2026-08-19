@@ -363,6 +363,83 @@ try {
   });
   check("object snapping aligns edges", snapped.a === snapped.b, JSON.stringify(snapped));
 
+  // Regression: Enter and Escape were the only ways out of multi-point mode.
+  // Clicking again just extended the line, so a user trying to finish kept
+  // adding segments — which is how a "straight line" ends up a long wandering
+  // curve. The second click of a double-click lands on the point the first one
+  // placed, and that now ends the line.
+  await resetView();
+  await page.keyboard.press("l");
+  await page.mouse.click(400, 500);
+  await page.mouse.click(550, 560);
+  await page.mouse.click(700, 470);
+  await page.mouse.dblclick(700, 470);
+  await page.waitForTimeout(120);
+  const afterDouble = await page.evaluate(() => {
+    const line = window.axdraw.elements.filter((element) => !element.isDeleted).pop();
+    return { type: line?.type, points: line?.points?.length ?? 0 };
+  });
+  // Moving away would extend the line if it were still being placed.
+  await page.mouse.move(950, 650);
+  await page.waitForTimeout(120);
+  const settled = await page.evaluate(() => {
+    const line = window.axdraw.elements.filter((element) => !element.isDeleted).pop();
+    return line?.points?.length ?? 0;
+  });
+  check(
+    "double-click finishes a multi-point line",
+    afterDouble.type === "line" && afterDouble.points === 3 && settled === afterDouble.points,
+    JSON.stringify({ ...afterDouble, settled }),
+  );
+
+  /* ---------------- canvas naming ---------------- */
+
+  const nameField = ".board-name-input";
+  const originalName = await page.$eval(nameField, (node) => node.value);
+  await page.click(nameField);
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("강의 1주차");
+  // Tool shortcuts live on window; typing in the name must not reach them.
+  const toolWhileTyping = await page.evaluate(() => window.axdraw.state.tool);
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(120);
+  const renamed = await page.evaluate(() => ({
+    name: window.axdraw.currentBoardName(),
+    stored: JSON.parse(localStorage.getItem("axdraw:boards") || "[]").map((board) => board.name),
+  }));
+  check(
+    "the canvas can be renamed in place and is saved",
+    renamed.name === "강의 1주차" && renamed.stored.includes("강의 1주차") && toolWhileTyping !== "line",
+    JSON.stringify({ ...renamed, toolWhileTyping }),
+  );
+
+  await page.click(nameField);
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("   ");
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(120);
+  check(
+    "a blank canvas name is rejected",
+    (await page.evaluate(() => window.axdraw.currentBoardName())) === "강의 1주차",
+    await page.evaluate(() => window.axdraw.currentBoardName()),
+  );
+
+  await page.click(nameField);
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("버리는 이름");
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(120);
+  check(
+    "Escape abandons a name edit",
+    (await page.evaluate(() => window.axdraw.currentBoardName())) === "강의 1주차",
+    await page.evaluate(() => window.axdraw.currentBoardName()),
+  );
+  await page.evaluate(
+    (name) => window.axdraw.renameBoard(window.axdraw.currentBoardId(), name),
+    originalName,
+  );
+
+
   /* ---------------- command palette ---------------- */
 
   await resetView();
@@ -561,6 +638,122 @@ try {
 
   const offHandle = await cursorAt(560, 460);
   check("the resize cursor clears away from the handle", offHandle !== "nwse-resize", offHandle);
+
+  /* ---------------- every button ---------------- */
+
+  // Clicks every visible control in the chrome and checks the app survives it.
+  // This is a crash net, not a behaviour check: the point is that no button
+  // throws, wedges the UI, or leaves a modal that swallows the next click.
+  // A rebuild-during-blur crash in the canvas-name field is exactly the kind of
+  // thing that passed every targeted test and broke the moment a real user
+  // clicked something else.
+
+  // Anything that would leave the page or hit the network is stubbed, so a
+  // failure here means the app broke, not that the sandbox is offline.
+  await page.route("**/*", (route) => {
+    const url = route.request().url();
+    // The share API is same-origin but has no server behind `vite preview`, so
+    // it 404s and that lands in the console as an error the app did not cause.
+    if (/\/api\//.test(url)) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ id: "e2e-stub" }),
+      });
+    }
+    if (url.startsWith(BASE)) return route.continue();
+    return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  page.on("dialog", (dialog) => void dialog.dismiss().catch(() => {}));
+  page.on("filechooser", (chooser) => void chooser.setFiles([]).catch(() => {}));
+
+  const buttonInventory = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll(".ax-ui button")]
+        .filter((node) => node.offsetWidth || node.offsetHeight)
+        .map((node, index) => ({
+          index,
+          id:
+            (node.getAttribute("title") || node.getAttribute("aria-label") || node.textContent || "")
+              .trim()
+              .slice(0, 40) || `(button ${index})`,
+        })),
+    );
+
+  /** Put the editor back in a known state between clicks. */
+  const settle = async () => {
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.evaluate(() => {
+      // Close anything modal that a button opened, without relying on each
+      // dialog honouring Escape.
+      for (const node of document.querySelectorAll(".modal-backdrop, .cp-backdrop, .menu, .popover")) {
+        if (node.classList.contains("cp-backdrop")) node.hidden = true;
+        else node.remove();
+      }
+    });
+    await page.waitForTimeout(35);
+  };
+
+  const clickEveryButton = async (label, prepare) => {
+    const broken = [];
+    const inventory = await prepare();
+    for (const entry of inventory) {
+      const before = errors.length;
+      const clicked = await page.evaluate((index) => {
+        const nodes = [...document.querySelectorAll(".ax-ui button")].filter(
+          (node) => node.offsetWidth || node.offsetHeight,
+        );
+        const node = nodes[index];
+        if (!node) return false;
+        node.click();
+        return true;
+      }, entry.index);
+      if (!clicked) continue;
+      await page.waitForTimeout(45);
+      // Still alive? A wedged app fails this before it fails anything else.
+      const alive = await page
+        .evaluate(() => {
+          window.axdraw.render();
+          return typeof window.axdraw.currentBoardId() === "string";
+        })
+        .catch(() => false);
+      const newErrors = errors.slice(before);
+      if (!alive || newErrors.length) {
+        broken.push(`${entry.id}${newErrors.length ? ` → ${newErrors[0].slice(0, 70)}` : " → wedged"}`);
+      }
+      await settle();
+      await prepare();
+    }
+    check(`every ${label} button survives a click`, broken.length === 0, broken.join(" | ") || `${inventory.length} buttons`);
+  };
+
+  await resetView();
+  await clickEveryButton("idle", async () => {
+    await page.keyboard.press("v").catch(() => {});
+    return buttonInventory();
+  });
+
+  await clickEveryButton("selection-panel", async () => {
+    await page.evaluate(() => {
+      const app = window.axdraw;
+      if (app.elements.filter((element) => !element.isDeleted).length < 2) {
+        app.clearCanvas();
+      }
+    });
+    if ((await scene()).n < 2) {
+      await page.keyboard.press("r");
+      await drag([500, 300], [650, 420]);
+      await page.keyboard.press("r");
+      await drag([760, 300], [900, 420]);
+    }
+    await page.keyboard.press("v");
+    await page.keyboard.press("Control+a");
+    await page.waitForTimeout(35);
+    return buttonInventory();
+  });
+
+  await page.unroute("**/*");
+  await resetView();
 
   /* ---------------- view options ---------------- */
 

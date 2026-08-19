@@ -57,6 +57,8 @@ export function createUI(app: App): void {
   app.container.appendChild(root);
 
   const topLeft = h("div", { class: "top-left" });
+  const boardName = boardNameField(app);
+  const toolIsland = h("div", { class: "island", style: { padding: "6px" } });
   const toolbar = h("div", { class: "toolbar island" });
   const topRight = h("div", { class: "top-right" });
   const bottomLeft = h("div", { class: "bottom-left" });
@@ -64,6 +66,25 @@ export function createUI(app: App): void {
   const panel = h("div", { class: "panel island" });
   const welcome = h("div", { class: "welcome" });
 
+  topLeft.append(
+    h(
+      "div",
+      { class: "island", style: { display: "flex", alignItems: "center", gap: "4px", padding: "6px" } },
+      [
+        button({
+          icon: iconEl("menu"),
+          title: "Menu",
+          onClick: (event) => {
+            event.stopPropagation();
+            openMainMenu(app, root, topLeft, render);
+          },
+        }),
+        h("span", { class: "brand", text: "axdraw" }),
+        boardName,
+      ],
+    ),
+    toolIsland,
+  );
   root.append(topLeft, toolbar, topRight, bottomLeft, bottomRight, panel, welcome);
 
   // Top-centre banner, always shown (no close button): identity + sponsorship.
@@ -166,42 +187,37 @@ export function createUI(app: App): void {
    * ---------------------------------------------------------------- */
 
   function renderCorners(): void {
-    topLeft.replaceChildren(
-      h("div", { class: "island", style: { display: "flex", alignItems: "center", gap: "4px", padding: "6px" } }, [
-        button({
-          icon: iconEl("menu"),
-          title: "Menu",
-          onClick: (event) => {
-            event.stopPropagation();
-            openMainMenu(app, root, topLeft, render);
-          },
-        }),
-        h("span", { class: "brand", text: "axdraw" }),
-      ]),
-      h("div", { class: "island", style: { padding: "6px" } }, [
-        button({
-          icon: iconEl("template"),
-          label: "Templates",
-          className: "btn--wide",
-          title: "Templates",
-          onClick: () => openTemplateDialog(app),
-        }),
-        button({
-          icon: iconEl("wand"),
-          label: "AI",
-          className: "btn--wide",
-          title: t("Draw with AI"),
-          onClick: () => openAiDrawDialog(app),
-        }),
-        button({
-          icon: iconEl("help"),
-          label: "챗",
-          className: "btn--wide",
-          title: t("AI chat"),
-          onClick: () => toggleAiChat(app),
-        }),
-      ]),
+    // Only the second island is rebuilt. The first holds the canvas-name input,
+    // and replaceChildren would take it out of the document — which blurs it
+    // mid-edit, fires a commit from inside a render, and loses the caret.
+    // Keeping it out of the churn is far simpler than restoring all of that.
+    toolIsland.replaceChildren(
+      button({
+        icon: iconEl("template"),
+        label: "Templates",
+        className: "btn--wide",
+        title: "Templates",
+        onClick: () => openTemplateDialog(app),
+      }),
+      button({
+        icon: iconEl("wand"),
+        label: "AI",
+        className: "btn--wide",
+        title: t("Draw with AI"),
+        onClick: () => openAiDrawDialog(app),
+      }),
+      button({
+        icon: iconEl("help"),
+        label: "챗",
+        className: "btn--wide",
+        title: t("AI chat"),
+        onClick: () => toggleAiChat(app),
+      }),
     );
+
+    // The board can change under us: a new canvas, a switch, a shared scene
+    // loading. Refresh the field unless the user is in the middle of typing.
+    if (document.activeElement !== boardName) boardName.value = app.currentBoardName();
 
     topRight.replaceChildren(
       ...(COFFEE_URL
@@ -566,15 +582,36 @@ export function createUI(app: App): void {
     }
   }
 
+  // Rebuilding the chrome removes whatever had focus, and removal fires blur
+  // synchronously. A blur handler that changes app state would re-enter render
+  // while replaceChildren is still walking the old children, which throws
+  // ("the node to be removed is no longer a child of this node") and leaves the
+  // chrome half-built. Coalesce instead: a render asked for during a render
+  // runs once, after.
+  let rendering = false;
+  let renderQueued = false;
   function render(): void {
-    if (sliderActive) {
-      renderCorners();
+    if (rendering) {
+      renderQueued = true;
       return;
     }
-    renderToolbar();
-    renderCorners();
-    renderPanel();
-    renderWelcome();
+    rendering = true;
+    try {
+      if (sliderActive) {
+        renderCorners();
+      } else {
+        renderToolbar();
+        renderCorners();
+        renderPanel();
+        renderWelcome();
+      }
+    } finally {
+      rendering = false;
+    }
+    if (renderQueued) {
+      renderQueued = false;
+      render();
+    }
   }
 
   window.addEventListener("keydown", (event) => {
@@ -825,6 +862,7 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
     menuItem("download", "Save to file", "Ctrl+S", run(() => app.saveToFile())),
     menuItem("image", "Export image…", "Ctrl+E", run(() => openExportDialog(app))),
     menuItem("copy", "Copy canvas to clipboard", null, run(() => void app.copyPngToClipboard())),
+    menuItem("copy", "Copy canvas as SVG", null, run(() => void app.copySvgToClipboard())),
     menuItem("link", "Share link…", null, run(() => void app.shareLink())),
     menuItem(
       "users",
@@ -895,6 +933,57 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
   const dispose = dismissable(menu, close);
 }
 
+/**
+ * The current canvas name, editable in place.
+ *
+ * A board's name is the only thing distinguishing it in the picker, and the
+ * picker is the only place it could be set — which meant the name of the
+ * canvas you are actually looking at was invisible. Editing commits on blur or
+ * Enter; Escape puts the old name back, so an abandoned edit costs nothing.
+ */
+/**
+ * The current canvas name, editable in place.
+ *
+ * A board's name was the only thing distinguishing it in the picker, and the
+ * picker was the only place it could be set — so the name of the canvas you
+ * were actually looking at appeared nowhere. Enter or blur commits, Escape
+ * restores. This element is created once and deliberately left out of the
+ * chrome rebuild, so an edit in progress survives whatever else changes.
+ */
+function boardNameField(app: App): HTMLInputElement {
+  const input = h("input", {
+    class: "board-name-input",
+    type: "text",
+    value: app.currentBoardName(),
+    title: t("Rename this canvas"),
+    "aria-label": t("Canvas name"),
+    spellcheck: "false",
+  }) as HTMLInputElement;
+
+  const commit = () => {
+    // renameBoard refuses a blank name; mirror its decision back into the box
+    // so a cleared field does not sit there looking like it saved.
+    app.renameBoard(app.currentBoardId(), input.value);
+    input.value = app.currentBoardName();
+  };
+
+  input.addEventListener("keydown", (event) => {
+    // Tool shortcuts are single keys bound on window, so every keystroke here
+    // has to stop before it reaches them — otherwise typing "rope" changes
+    // tool four times.
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      commit();
+      input.blur();
+    } else if (event.key === "Escape") {
+      input.value = app.currentBoardName();
+      input.blur();
+    }
+  });
+  input.addEventListener("blur", commit);
+  return input;
+}
+
 /** Boards — every canvas saved in this browser, newest first. */
 function openBoardsDialog(app: App): void {
   const backdrop = h("div", { class: "modal-backdrop" });
@@ -929,6 +1018,18 @@ function openBoardsDialog(app: App): void {
               h("span", { class: "board-date", text: new Date(board.updated).toLocaleString() }),
             ],
           ),
+          h("button", {
+            class: "secondary-btn board-rename",
+            type: "button",
+            text: t("Rename"),
+            title: t("Rename this canvas"),
+            onclick: () => {
+              const next = window.prompt(t("Canvas name"), board.name);
+              if (next === null) return;
+              app.renameBoard(board.id, next);
+              renderRows();
+            },
+          }),
           h("button", {
             class: "secondary-btn board-delete",
             type: "button",
@@ -1002,6 +1103,7 @@ function openContextMenu(
       menuItem("copy", "Copy", "Ctrl+C", run(() => app.copySelection())),
       menuItem("duplicate", "Duplicate", "Ctrl+D", run(() => app.duplicate())),
       menuItem("copy", "Copy as PNG", null, run(() => void app.copyPngToClipboard())),
+      menuItem("copy", "Copy as SVG", null, run(() => void app.copySvgToClipboard())),
       h("div", { class: "dropdown-separator" }),
       menuItem("bringToFront", "Bring to front", "Ctrl+Shift+]", run(() => app.changeZ("front"))),
       menuItem("bringForward", "Bring forward", "Ctrl+]", run(() => app.changeZ("forward"))),
