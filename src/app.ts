@@ -2943,9 +2943,25 @@ export class App {
     downloadBlob(new Blob([svg], { type: "image/svg+xml" }), "drawing.svg");
   }
 
+  /**
+   * What a copy-to-clipboard should contain: the selection if there is one,
+   * the whole scene otherwise.
+   *
+   * The download paths take an explicit selectionOnly flag because their
+   * dialog offers the choice. Copy has no dialog, so it has to read the
+   * intent off the canvas — and "I selected these three shapes, then hit
+   * copy as image" can only mean those three.
+   */
+  private elementsForClipboard(): AxElement[] {
+    const selected = this.getSelectedElements();
+    return selected.length ? selected : this.elements.filter((element) => !element.isDeleted);
+  }
+
   async copyPngToClipboard(): Promise<void> {
     try {
-      const canvas = exportToCanvas(this.elements, this.files, {
+      const elements = this.elementsForClipboard();
+      if (!elements.length) throw new Error(t("Nothing to export"));
+      const canvas = exportToCanvas(elements, this.files, {
         exportBackground: true,
         viewBackgroundColor: this.state.viewBackgroundColor,
         scale: 2,
@@ -2954,6 +2970,41 @@ export class App {
       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
       if (!blob) throw new Error("Could not encode the image");
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    } catch (error) {
+      this.onError?.(error instanceof Error ? error.message : "Could not copy to the clipboard");
+    }
+  }
+
+  /**
+   * Copy the drawing as SVG. Written as text/plain as well as image/svg+xml:
+   * most editors refuse the SVG flavour outright, and the ones that take it
+   * still paste the markup from the text flavour, so offering both means the
+   * paste lands somewhere useful either way.
+   */
+  async copySvgToClipboard(): Promise<void> {
+    try {
+      const elements = this.elementsForClipboard();
+      if (!elements.length) throw new Error(t("Nothing to export"));
+      const svg = exportToSvgString(elements, this.files, {
+        exportBackground: true,
+        viewBackgroundColor: this.state.viewBackgroundColor,
+        scale: 1,
+        theme: this.state.theme,
+      });
+      const type = "image/svg+xml";
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            [type]: new Blob([svg], { type }),
+            "text/plain": new Blob([svg], { type: "text/plain" }),
+          }),
+        ]);
+      } catch {
+        // Safari and Firefox reject unsupported clipboard flavours rather
+        // than dropping them, so fall back to the markup as plain text.
+        await navigator.clipboard.writeText(svg);
+      }
+      this.onMessage?.(t("SVG copied"));
     } catch (error) {
       this.onError?.(error instanceof Error ? error.message : "Could not copy to the clipboard");
     }
