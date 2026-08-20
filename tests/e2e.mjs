@@ -639,6 +639,180 @@ try {
   const offHandle = await cursorAt(560, 460);
   check("the resize cursor clears away from the handle", offHandle !== "nwse-resize", offHandle);
 
+  /* ---------------- every menu item and dialog action ---------------- */
+
+  // The button sweep below clicks buttons and then presses Escape, so it never
+  // opened a menu item or pressed a dialog's action. Image export lived exactly
+  // in that gap: it downloaded fine, but the dialog stayed open with no
+  // feedback, so it looked broken. This walks the real path instead — open the
+  // menu, click the item, then press whatever the dialog offers.
+  await page.route("**/*", (route) => {
+    const url = route.request().url();
+    if (/\/api\//.test(url)) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "e2e-stub" }) });
+    }
+    if (url.startsWith(BASE)) return route.continue();
+    return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+
+  const openMenu = async () => {
+    await page.click('button[title="Menu"]');
+    await page.waitForTimeout(90);
+  };
+
+  const menuItems = async () => {
+    await openMenu();
+    const labels = await page.evaluate(() =>
+      [...document.querySelectorAll(".dropdown *")]
+        .filter((node) => node.offsetWidth && node.children.length === 0 && node.textContent.trim())
+        .map((node) => node.textContent.trim()),
+    );
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(60);
+    return [...new Set(labels)];
+  };
+
+  const clearOverlays = async () => {
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.evaluate(() => {
+      for (const node of document.querySelectorAll(".modal-backdrop, .dropdown, .menu, .popover")) node.remove();
+      const palette = document.querySelector(".cp-backdrop");
+      if (palette) palette.hidden = true;
+    });
+    await page.waitForTimeout(40);
+  };
+
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([420, 300], [620, 420]);
+  await page.keyboard.press("v");
+  await page.keyboard.press("Control+a");
+
+  // The menu carries view toggles (grid, snapping, assist, stats, view mode,
+  // theme). Clicking them all flips state that later tests assert on, so take
+  // a snapshot and put it back once the sweep is done.
+  const toggleSnapshot = await page.evaluate(() => {
+    const { gridEnabled, snapEnabled, shapeRecognition, statsEnabled, viewMode, theme } = window.axdraw.state;
+    return { gridEnabled, snapEnabled, shapeRecognition, statsEnabled, viewMode, theme };
+  });
+
+  const labels = await menuItems();
+  const brokenItems = [];
+  for (const label of labels) {
+    // Reloads the page or replaces the scene wholesale; both would invalidate
+    // every later assertion in this run.
+    if (/Open|Attach|New canvas|English|한국어|日本語|中文|Français/.test(label)) continue;
+    const before = errors.length;
+    await openMenu();
+    const opened = await page.evaluate((text) => {
+      const node = [...document.querySelectorAll(".dropdown *")].find(
+        (candidate) => candidate.offsetWidth && candidate.textContent.trim() === text,
+      );
+      if (!node) return false;
+      node.click();
+      return true;
+    }, label);
+    if (!opened) {
+      await clearOverlays();
+      continue;
+    }
+    await page.waitForTimeout(140);
+
+    // If it opened a dialog, press each action it offers.
+    const actions = await page.evaluate(() =>
+      [...document.querySelectorAll(".modal-backdrop .modal button")]
+        .map((node) => node.textContent.trim())
+        .filter((text) => text && !/^\d×$/.test(text)),
+    );
+    for (const action of actions) {
+      if (/Delete|삭제|Clear|지우기/.test(action)) continue;
+      await page.evaluate((text) => {
+        const node = [...document.querySelectorAll(".modal-backdrop .modal button")].find(
+          (candidate) => candidate.textContent.trim() === text,
+        );
+        node?.click();
+      }, action);
+      await page.waitForTimeout(160);
+      if (!(await page.evaluate(() => !!document.querySelector(".modal-backdrop")))) break;
+    }
+
+    const alive = await page
+      .evaluate(() => {
+        window.axdraw.render();
+        return typeof window.axdraw.currentBoardId() === "string";
+      })
+      .catch(() => false);
+    const raised = errors.slice(before);
+    if (!alive || raised.length) {
+      brokenItems.push(`${label}${raised.length ? ` → ${raised[0].slice(0, 60)}` : " → wedged"}`);
+    }
+    await clearOverlays();
+  }
+  await page.evaluate((snapshot) => {
+    Object.assign(window.axdraw.state, snapshot);
+    window.axdraw.applyTheme();
+    window.axdraw.render();
+  }, toggleSnapshot);
+
+  check(
+    "every menu item and dialog action survives",
+    brokenItems.length === 0,
+    brokenItems.join(" | ") || `${labels.length} items`,
+  );
+
+  // Export is the one whose failure mode was invisible: the file downloads but
+  // the dialog gave no sign, so pin the dialog closing to the export happening.
+  await clearOverlays();
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([420, 300], [620, 420]);
+  await page.keyboard.press("v");
+
+  const exported = [];
+  page.on("download", (download) => exported.push(download.suggestedFilename()));
+  for (const action of ["PNG", "SVG"]) {
+    await openMenu();
+    await page.evaluate(() => {
+      [...document.querySelectorAll(".dropdown *")]
+        .find((node) => node.offsetWidth && node.textContent.trim().startsWith("Export image"))
+        ?.click();
+    });
+    await page.waitForTimeout(160);
+    await page.evaluate((text) => {
+      [...document.querySelectorAll(".modal-backdrop .modal button")]
+        .find((node) => node.textContent.trim() === text)
+        ?.click();
+    }, action);
+    await page.waitForTimeout(900);
+    const stillOpen = await page.evaluate(() => !!document.querySelector(".modal-backdrop"));
+    check(
+      `exporting ${action} downloads a file and closes the dialog`,
+      exported.some((name) => name.toLowerCase().endsWith(action.toLowerCase())) && !stillOpen,
+      JSON.stringify({ exported, stillOpen }),
+    );
+    await clearOverlays();
+  }
+
+  // A cleared canvas has nothing to export; tombstones used to make it look
+  // full, so this wrote out a blank file instead of saying so.
+  await resetView();
+  let refused = "";
+  await page.evaluate(() => {
+    window.__lastError = null;
+    const previous = window.axdraw.onError;
+    window.axdraw.onError = (message) => {
+      window.__lastError = message;
+      previous?.(message);
+    };
+  });
+  await page.evaluate(() => window.axdraw.exportPng({}));
+  await page.waitForTimeout(400);
+  refused = await page.evaluate(() => window.__lastError);
+  check("exporting an empty canvas is refused", !!refused, String(refused));
+
+  await page.unroute("**/*");
+  await resetView();
+
   /* ---------------- stuck modifiers ---------------- */
 
   // Modifiers are tracked from key events, so a key released while the page is

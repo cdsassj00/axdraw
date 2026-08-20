@@ -2933,9 +2933,14 @@ export class App {
   }
 
   async exportPng(options: { scale?: number; background?: boolean; selectionOnly?: boolean } = {}): Promise<void> {
-    const elements = options.selectionOnly ? this.getSelectedElements() : this.elements;
+    // this.elements keeps tombstones for deleted items, so filtering matters:
+    // without it a cleared canvas counts as non-empty and exports a blank file
+    // instead of saying there is nothing to export.
+    const elements = options.selectionOnly
+      ? this.getSelectedElements()
+      : this.elements.filter((element) => !element.isDeleted);
     if (!elements.length) {
-      this.onError?.("Nothing to export");
+      this.onError?.(t("Nothing to export"));
       return;
     }
     const blob = await exportToBlob(elements, this.files, {
@@ -2948,9 +2953,14 @@ export class App {
   }
 
   exportSvg(options: { scale?: number; background?: boolean; selectionOnly?: boolean } = {}): void {
-    const elements = options.selectionOnly ? this.getSelectedElements() : this.elements;
+    // this.elements keeps tombstones for deleted items, so filtering matters:
+    // without it a cleared canvas counts as non-empty and exports a blank file
+    // instead of saying there is nothing to export.
+    const elements = options.selectionOnly
+      ? this.getSelectedElements()
+      : this.elements.filter((element) => !element.isDeleted);
     if (!elements.length) {
-      this.onError?.("Nothing to export");
+      this.onError?.(t("Nothing to export"));
       return;
     }
     const svg = exportToSvgString(elements, this.files, {

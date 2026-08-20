@@ -163,38 +163,50 @@ export function openExportDialog(app: App): void {
     h("div", { class: "field-row" }, [h("span", { text: "Scale" }), scaleRow]),
   ]);
 
+  // Assigned by modal() below; the actions need to dismiss the dialog they
+  // are declared inside.
+  let dismiss = () => {};
+  const options = () => ({
+    background: state.background,
+    selectionOnly: state.selectionOnly,
+    scale: state.scale,
+  });
+
   const footer = h("div", { class: "field-row", style: { justifyContent: "flex-end", marginTop: "18px" } }, [
     h("button", {
       class: "secondary-btn",
       type: "button",
       text: "Copy PNG",
-      onclick: () => void app.copyPngToClipboard(),
+      onclick: () => {
+        void app.copyPngToClipboard();
+        dismiss();
+      },
     }),
     h("button", {
       class: "secondary-btn",
       type: "button",
       text: "SVG",
-      onclick: () =>
-        app.exportSvg({
-          background: state.background,
-          selectionOnly: state.selectionOnly,
-          scale: state.scale,
-        }),
+      onclick: () => {
+        app.exportSvg(options());
+        dismiss();
+      },
     }),
     h("button", {
       class: "primary-btn",
       type: "button",
       text: "PNG",
-      onclick: () =>
-        void app.exportPng({
-          background: state.background,
-          selectionOnly: state.selectionOnly,
-          scale: state.scale,
-        }),
+      onclick: () => {
+        void app.exportPng(options());
+        dismiss();
+      },
     }),
   ]);
 
-  modal("Export image", body, footer);
+  // A download gives no on-page signal, so a dialog that just sits there after
+  // the click looks exactly like a dialog that did nothing. Closing it is the
+  // confirmation; the app raises a message if the export actually failed.
+  const backdrop = modal("Export image", body, footer);
+  dismiss = () => backdrop.remove();
 }
 
 export function openConfirmDialog(
