@@ -339,6 +339,10 @@ export class App {
     }
     this.state.selectedIds = new Set();
     this.state.editingTextId = null;
+    // A viewport that went non-finite was persisted as such (JSON turns NaN
+    // into null), so anyone already in that state would keep loading into a
+    // blank canvas. Repair on the way in.
+    this.ensureFiniteViewport();
     this.applyTheme();
   }
 
@@ -2618,6 +2622,10 @@ export class App {
   }
 
   private zoomAt(zoom: number, screenX: number, screenY: number): void {
+    if (!Number.isFinite(zoom)) return;
+    // A viewport that has already gone bad would otherwise poison the result:
+    // NaN scroll plus a good zoom is still NaN scroll.
+    this.ensureFiniteViewport();
     const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
     const before = screenToScene(screenX, screenY, this.viewport);
     this.state.zoom = next;
@@ -2629,10 +2637,34 @@ export class App {
     this.notify();
   }
 
+  /**
+   * Put the viewport back in a usable state if it has become non-finite.
+   *
+   * Once zoom or scroll is NaN nothing renders, every later calculation stays
+   * NaN, and the value is persisted — so the canvas comes back empty after a
+   * reload with no way to navigate back to the drawing.
+   */
+  private ensureFiniteViewport(): void {
+    if (!Number.isFinite(this.state.zoom)) this.state.zoom = 1;
+    if (!Number.isFinite(this.state.scrollX)) this.state.scrollX = 0;
+    if (!Number.isFinite(this.state.scrollY)) this.state.scrollY = 0;
+  }
+
   private zoomToBounds(bounds: { x1: number; y1: number; x2: number; y2: number }): void {
-    const width = bounds.x2 - bounds.x1;
-    const height = bounds.y2 - bounds.y1;
-    if (width <= 0 || height <= 0) return;
+    // One element with a bad coordinate — from a peer, an import, or a
+    // half-loaded image — is enough to make the common bounds non-finite.
+    // Moving the viewport to that would blank the canvas irrecoverably, so
+    // leave it where the user can still see their work.
+    if (![bounds.x1, bounds.y1, bounds.x2, bounds.y2].every(Number.isFinite)) {
+      this.onError?.(t("Could not work out where the drawing is"));
+      return;
+    }
+    // A drawing that is a single horizontal or vertical line has zero extent on
+    // one axis. Bailing out left "zoom to fit" doing nothing at all, which is
+    // indistinguishable from the drawing having vanished; give it a minimum
+    // extent and fit that instead.
+    const width = Math.max(bounds.x2 - bounds.x1, 1);
+    const height = Math.max(bounds.y2 - bounds.y1, 1);
     const padding = 80;
     const zoom = Math.max(
       MIN_ZOOM,
@@ -2645,17 +2677,38 @@ export class App {
         ),
       ),
     );
-    this.state.zoom = Math.min(zoom, 1.5);
-    this.state.scrollX = this.container.clientWidth / (2 * this.state.zoom) - (bounds.x1 + bounds.x2) / 2;
-    this.state.scrollY = this.container.clientHeight / (2 * this.state.zoom) - (bounds.y1 + bounds.y2) / 2;
+    const nextZoom = Math.min(zoom, 1.5);
+    const nextScrollX = this.container.clientWidth / (2 * nextZoom) - (bounds.x1 + bounds.x2) / 2;
+    const nextScrollY = this.container.clientHeight / (2 * nextZoom) - (bounds.y1 + bounds.y2) / 2;
+    // Last line of defence: a zero-size container (a hidden tab) makes these
+    // infinite, and writing that is what makes the state unrecoverable.
+    if (![nextZoom, nextScrollX, nextScrollY].every(Number.isFinite)) return;
+    this.state.zoom = nextZoom;
+    this.state.scrollX = nextScrollX;
+    this.state.scrollY = nextScrollY;
     this.scheduleRender();
     this.schedulePersist();
     this.notify();
   }
 
+  /** Elements a viewport fit can actually be computed from. */
+  private measurable(elements: readonly AxElement[]): AxElement[] {
+    return elements.filter(
+      (element) =>
+        !element.isDeleted &&
+        Number.isFinite(element.x) &&
+        Number.isFinite(element.y) &&
+        Number.isFinite(element.width) &&
+        Number.isFinite(element.height),
+    );
+  }
+
   zoomToFit(): void {
-    const visible = this.elements.filter((element) => !element.isDeleted);
+    // Skipping unmeasurable elements rather than failing on them means one bad
+    // shape costs you that shape, not the ability to find the rest.
+    const visible = this.measurable(this.elements);
     if (!visible.length) {
+      this.ensureFiniteViewport();
       this.setZoom(1);
       return;
     }
@@ -2663,7 +2716,7 @@ export class App {
   }
 
   zoomToSelection(): void {
-    const selected = this.getSelectedElements();
+    const selected = this.measurable(this.getSelectedElements());
     if (!selected.length) {
       this.zoomToFit();
       return;

@@ -813,6 +813,107 @@ try {
   await page.unroute("**/*");
   await resetView();
 
+  /* ---------------- zoom to fit ---------------- */
+
+  // "Zoom to fit" is the way back when you have lost your drawing, so its
+  // failure modes are the worst kind: it used to bail out silently on a
+  // zero-height drawing, and one element with a bad coordinate set zoom and
+  // scroll to NaN — a blank canvas that survived a reload, with no way to
+  // navigate back.
+  const viewport = () =>
+    page.evaluate(() => ({
+      zoom: window.axdraw.state.zoom,
+      scrollX: window.axdraw.state.scrollX,
+      scrollY: window.axdraw.state.scrollY,
+    }));
+  const somethingOnScreen = () =>
+    page.evaluate(() => {
+      const app = window.axdraw;
+      const view = app.viewport;
+      return app.elements
+        .filter((element) => !element.isDeleted && Number.isFinite(element.x))
+        .some((element) => {
+          const x = (element.x + view.scrollX) * view.zoom;
+          const y = (element.y + view.scrollY) * view.zoom;
+          return x > -200 && x < view.width + 200 && y > -200 && y < view.height + 200;
+        });
+    });
+  const parkViewportFarAway = () =>
+    page.evaluate(() => {
+      const app = window.axdraw;
+      app.state.zoom = 5;
+      app.state.scrollX = -8000;
+      app.state.scrollY = -8000;
+      app.render();
+    });
+
+  await resetView();
+  await page.keyboard.press("l");
+  await page.mouse.move(400, 400);
+  await page.mouse.down();
+  await page.mouse.move(800, 400, { steps: 8 });
+  await page.mouse.up();
+  await parkViewportFarAway();
+  await page.evaluate(() => window.axdraw.zoomToFit());
+  await page.waitForTimeout(90);
+  check(
+    "zoom to fit finds a drawing with no height",
+    await somethingOnScreen(),
+    JSON.stringify(await viewport()),
+  );
+
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([400, 300], [600, 420]);
+  await page.evaluate(() => {
+    const app = window.axdraw;
+    const copy = JSON.parse(JSON.stringify(app.elements.find((element) => !element.isDeleted)));
+    copy.id = "bad-coordinate";
+    copy.x = NaN;
+    app.elements = [...app.elements, copy];
+  });
+  await parkViewportFarAway();
+  await page.evaluate(() => window.axdraw.zoomToFit());
+  await page.waitForTimeout(90);
+  const afterBad = await viewport();
+  check(
+    "one bad element cannot blank the viewport",
+    Object.values(afterBad).every(Number.isFinite) && (await somethingOnScreen()),
+    JSON.stringify(afterBad),
+  );
+
+  await page.evaluate(() => {
+    const app = window.axdraw;
+    app.state.zoom = NaN;
+    app.state.scrollX = NaN;
+    app.state.scrollY = NaN;
+  });
+  await page.evaluate(() => window.axdraw.zoomToFit());
+  await page.waitForTimeout(90);
+  const recovered = await viewport();
+  check(
+    "zoom to fit recovers an already-broken viewport",
+    Object.values(recovered).every(Number.isFinite),
+    JSON.stringify(recovered),
+  );
+
+  // JSON stores NaN as null, so a viewport that went bad once came back bad.
+  await page.evaluate(() => {
+    const raw = JSON.parse(localStorage.getItem("axdraw:state") || "{}");
+    raw.zoom = null;
+    raw.scrollX = null;
+    raw.scrollY = null;
+    localStorage.setItem("axdraw:state", JSON.stringify(raw));
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(900);
+  const reloaded = await viewport();
+  check(
+    "a persisted broken viewport is repaired on load",
+    Object.values(reloaded).every(Number.isFinite),
+    JSON.stringify(reloaded),
+  );
+
   /* ---------------- stuck modifiers ---------------- */
 
   // Modifiers are tracked from key events, so a key released while the page is
