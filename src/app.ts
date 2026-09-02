@@ -2908,7 +2908,12 @@ export class App {
   applyRemoteScene(remote: readonly AxElement[], files: BinaryFiles): void {
     const merged = new Map<string, AxElement>();
     for (const element of this.elements) merged.set(element.id, element);
-    for (const element of remote) {
+    for (const raw of remote) {
+      // Every other way elements enter the scene — opening a file, loading a
+      // shared link, restoring from storage — runs them through the normaliser.
+      // This path did not, so whatever a peer sent went straight in, including
+      // geometry the rest of the editor cannot work with.
+      const element = normalizeImportedElement(raw as unknown as Record<string, unknown>);
       if (!merged.has(element.id)) this.remoteElementIds.add(element.id);
       const local = merged.get(element.id);
       if (

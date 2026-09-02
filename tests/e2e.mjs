@@ -914,6 +914,60 @@ try {
     JSON.stringify(reloaded),
   );
 
+  // A collaborator's elements used to go into the scene unchecked, while every
+  // other entry point normalised them. That is why this showed up in a shared
+  // room: one peer sending a malformed element was enough to break zoom to fit
+  // for everyone, and the damage persisted.
+  await resetView();
+  await page.evaluate(() => {
+    window.axdraw.applyRemoteScene(
+      [
+        {
+          id: "peer-bad",
+          type: "rectangle",
+          x: "not a number",
+          y: null,
+          width: undefined,
+          height: NaN,
+          angle: NaN,
+          version: 99,
+          updated: Date.now(),
+          seed: 1,
+        },
+      ],
+      {},
+    );
+  });
+  await page.waitForTimeout(90);
+  const ingested = await page.evaluate(() => {
+    const element = window.axdraw.elements.find((item) => item.id === "peer-bad");
+    return element && {
+      x: element.x,
+      y: element.y,
+      width: element.width,
+      height: element.height,
+      angle: element.angle,
+    };
+  });
+  check(
+    "a collaborator's malformed element is normalised on arrival",
+    !!ingested && Object.values(ingested).every(Number.isFinite),
+    JSON.stringify(ingested),
+  );
+
+  await page.evaluate(() => window.axdraw.zoomToFit());
+  await page.waitForTimeout(90);
+  const afterPeer = await page.evaluate(() => ({
+    zoom: window.axdraw.state.zoom,
+    scrollX: window.axdraw.state.scrollX,
+    scrollY: window.axdraw.state.scrollY,
+  }));
+  check(
+    "zoom to fit still works after a peer sends a bad element",
+    Object.values(afterPeer).every(Number.isFinite),
+    JSON.stringify(afterPeer),
+  );
+
   /* ---------------- stuck modifiers ---------------- */
 
   // Modifiers are tracked from key events, so a key released while the page is
