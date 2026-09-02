@@ -254,8 +254,26 @@ export interface ParsedScene {
  * Fill in defaults and translate the numeric enums used by Excalidraw scene
  * files, so foreign scenes open without special-casing them later.
  */
+/**
+ * Coerce to a usable number. A non-finite coordinate is not a small cosmetic
+ * problem: it propagates through every bounds calculation that touches the
+ * element, and one of those is zoom-to-fit, which then writes NaN into the
+ * viewport and leaves the canvas blank with no way back.
+ */
+function finite(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export function normalizeImportedElement(raw: Record<string, unknown>): AxElement {
   const element = { ...raw } as Record<string, unknown>;
+
+  // Geometry was previously passed through untouched, so anything that arrived
+  // missing or malformed stayed that way.
+  element.x = finite(element.x);
+  element.y = finite(element.y);
+  element.width = Math.max(0, finite(element.width));
+  element.height = Math.max(0, finite(element.height));
 
   if (typeof element.fontFamily === "number") {
     element.fontFamily = element.fontFamily === 2 ? "normal" : element.fontFamily === 3 ? "code" : "hand";
@@ -267,8 +285,8 @@ export function normalizeImportedElement(raw: Record<string, unknown>): AxElemen
   if (element.roundness === undefined) element.roundness = null;
 
   element.id = String(element.id ?? Math.random().toString(36).slice(2));
-  element.angle = Number(element.angle ?? 0);
-  element.opacity = Number(element.opacity ?? 100);
+  element.angle = finite(element.angle);
+  element.opacity = finite(element.opacity, 100);
   element.seed = Number(element.seed ?? Math.floor(Math.random() * 2 ** 31));
   element.version = Number(element.version ?? 1);
   element.groupIds = Array.isArray(element.groupIds) ? element.groupIds : [];

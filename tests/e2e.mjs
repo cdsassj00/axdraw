@@ -639,6 +639,476 @@ try {
   const offHandle = await cursorAt(560, 460);
   check("the resize cursor clears away from the handle", offHandle !== "nwse-resize", offHandle);
 
+  /* ---------------- every menu item and dialog action ---------------- */
+
+  // The button sweep below clicks buttons and then presses Escape, so it never
+  // opened a menu item or pressed a dialog's action. Image export lived exactly
+  // in that gap: it downloaded fine, but the dialog stayed open with no
+  // feedback, so it looked broken. This walks the real path instead — open the
+  // menu, click the item, then press whatever the dialog offers.
+  await page.route("**/*", (route) => {
+    const url = route.request().url();
+    if (/\/api\//.test(url)) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "e2e-stub" }) });
+    }
+    if (url.startsWith(BASE)) return route.continue();
+    return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+
+  const openMenu = async () => {
+    await page.click('button[title="Menu"]');
+    await page.waitForTimeout(90);
+  };
+
+  const menuItems = async () => {
+    await openMenu();
+    const labels = await page.evaluate(() =>
+      [...document.querySelectorAll(".dropdown *")]
+        .filter((node) => node.offsetWidth && node.children.length === 0 && node.textContent.trim())
+        .map((node) => node.textContent.trim()),
+    );
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(60);
+    return [...new Set(labels)];
+  };
+
+  const clearOverlays = async () => {
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.evaluate(() => {
+      for (const node of document.querySelectorAll(".modal-backdrop, .dropdown, .menu, .popover")) node.remove();
+      const palette = document.querySelector(".cp-backdrop");
+      if (palette) palette.hidden = true;
+    });
+    await page.waitForTimeout(40);
+  };
+
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([420, 300], [620, 420]);
+  await page.keyboard.press("v");
+  await page.keyboard.press("Control+a");
+
+  // The menu carries view toggles (grid, snapping, assist, stats, view mode,
+  // theme). Clicking them all flips state that later tests assert on, so take
+  // a snapshot and put it back once the sweep is done.
+  const toggleSnapshot = await page.evaluate(() => {
+    const { gridEnabled, snapEnabled, shapeRecognition, statsEnabled, viewMode, theme } = window.axdraw.state;
+    return { gridEnabled, snapEnabled, shapeRecognition, statsEnabled, viewMode, theme };
+  });
+
+  const labels = await menuItems();
+  const brokenItems = [];
+  for (const label of labels) {
+    // Reloads the page or replaces the scene wholesale; both would invalidate
+    // every later assertion in this run.
+    if (/Open|Attach|New canvas|English|한국어|日本語|中文|Français/.test(label)) continue;
+    const before = errors.length;
+    await openMenu();
+    const opened = await page.evaluate((text) => {
+      const node = [...document.querySelectorAll(".dropdown *")].find(
+        (candidate) => candidate.offsetWidth && candidate.textContent.trim() === text,
+      );
+      if (!node) return false;
+      node.click();
+      return true;
+    }, label);
+    if (!opened) {
+      await clearOverlays();
+      continue;
+    }
+    await page.waitForTimeout(140);
+
+    // If it opened a dialog, press each action it offers.
+    const actions = await page.evaluate(() =>
+      [...document.querySelectorAll(".modal-backdrop .modal button")]
+        .map((node) => node.textContent.trim())
+        .filter((text) => text && !/^\d×$/.test(text)),
+    );
+    for (const action of actions) {
+      if (/Delete|삭제|Clear|지우기/.test(action)) continue;
+      await page.evaluate((text) => {
+        const node = [...document.querySelectorAll(".modal-backdrop .modal button")].find(
+          (candidate) => candidate.textContent.trim() === text,
+        );
+        node?.click();
+      }, action);
+      await page.waitForTimeout(160);
+      if (!(await page.evaluate(() => !!document.querySelector(".modal-backdrop")))) break;
+    }
+
+    const alive = await page
+      .evaluate(() => {
+        window.axdraw.render();
+        return typeof window.axdraw.currentBoardId() === "string";
+      })
+      .catch(() => false);
+    const raised = errors.slice(before);
+    if (!alive || raised.length) {
+      brokenItems.push(`${label}${raised.length ? ` → ${raised[0].slice(0, 60)}` : " → wedged"}`);
+    }
+    await clearOverlays();
+  }
+  await page.evaluate((snapshot) => {
+    Object.assign(window.axdraw.state, snapshot);
+    window.axdraw.applyTheme();
+    window.axdraw.render();
+  }, toggleSnapshot);
+
+  check(
+    "every menu item and dialog action survives",
+    brokenItems.length === 0,
+    brokenItems.join(" | ") || `${labels.length} items`,
+  );
+
+  // Export is the one whose failure mode was invisible: the file downloads but
+  // the dialog gave no sign, so pin the dialog closing to the export happening.
+  await clearOverlays();
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([420, 300], [620, 420]);
+  await page.keyboard.press("v");
+
+  const exported = [];
+  page.on("download", (download) => exported.push(download.suggestedFilename()));
+  for (const action of ["PNG", "SVG"]) {
+    await openMenu();
+    await page.evaluate(() => {
+      [...document.querySelectorAll(".dropdown *")]
+        .find((node) => node.offsetWidth && node.textContent.trim().startsWith("Export image"))
+        ?.click();
+    });
+    await page.waitForTimeout(160);
+    await page.evaluate((text) => {
+      [...document.querySelectorAll(".modal-backdrop .modal button")]
+        .find((node) => node.textContent.trim() === text)
+        ?.click();
+    }, action);
+    await page.waitForTimeout(900);
+    const stillOpen = await page.evaluate(() => !!document.querySelector(".modal-backdrop"));
+    check(
+      `exporting ${action} downloads a file and closes the dialog`,
+      exported.some((name) => name.toLowerCase().endsWith(action.toLowerCase())) && !stillOpen,
+      JSON.stringify({ exported, stillOpen }),
+    );
+    await clearOverlays();
+  }
+
+  // A cleared canvas has nothing to export; tombstones used to make it look
+  // full, so this wrote out a blank file instead of saying so.
+  await resetView();
+  let refused = "";
+  await page.evaluate(() => {
+    window.__lastError = null;
+    const previous = window.axdraw.onError;
+    window.axdraw.onError = (message) => {
+      window.__lastError = message;
+      previous?.(message);
+    };
+  });
+  await page.evaluate(() => window.axdraw.exportPng({}));
+  await page.waitForTimeout(400);
+  refused = await page.evaluate(() => window.__lastError);
+  check("exporting an empty canvas is refused", !!refused, String(refused));
+
+  await page.unroute("**/*");
+  await resetView();
+
+  /* ---------------- zoom to fit ---------------- */
+
+  // "Zoom to fit" is the way back when you have lost your drawing, so its
+  // failure modes are the worst kind: it used to bail out silently on a
+  // zero-height drawing, and one element with a bad coordinate set zoom and
+  // scroll to NaN — a blank canvas that survived a reload, with no way to
+  // navigate back.
+  const viewport = () =>
+    page.evaluate(() => ({
+      zoom: window.axdraw.state.zoom,
+      scrollX: window.axdraw.state.scrollX,
+      scrollY: window.axdraw.state.scrollY,
+    }));
+  const somethingOnScreen = () =>
+    page.evaluate(() => {
+      const app = window.axdraw;
+      const view = app.viewport;
+      return app.elements
+        .filter((element) => !element.isDeleted && Number.isFinite(element.x))
+        .some((element) => {
+          const x = (element.x + view.scrollX) * view.zoom;
+          const y = (element.y + view.scrollY) * view.zoom;
+          return x > -200 && x < view.width + 200 && y > -200 && y < view.height + 200;
+        });
+    });
+  const parkViewportFarAway = () =>
+    page.evaluate(() => {
+      const app = window.axdraw;
+      app.state.zoom = 5;
+      app.state.scrollX = -8000;
+      app.state.scrollY = -8000;
+      app.render();
+    });
+
+  await resetView();
+  await page.keyboard.press("l");
+  await page.mouse.move(400, 400);
+  await page.mouse.down();
+  await page.mouse.move(800, 400, { steps: 8 });
+  await page.mouse.up();
+  await parkViewportFarAway();
+  await page.evaluate(() => window.axdraw.zoomToFit());
+  await page.waitForTimeout(90);
+  check(
+    "zoom to fit finds a drawing with no height",
+    await somethingOnScreen(),
+    JSON.stringify(await viewport()),
+  );
+
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([400, 300], [600, 420]);
+  await page.evaluate(() => {
+    const app = window.axdraw;
+    const copy = JSON.parse(JSON.stringify(app.elements.find((element) => !element.isDeleted)));
+    copy.id = "bad-coordinate";
+    copy.x = NaN;
+    app.elements = [...app.elements, copy];
+  });
+  await parkViewportFarAway();
+  await page.evaluate(() => window.axdraw.zoomToFit());
+  await page.waitForTimeout(90);
+  const afterBad = await viewport();
+  check(
+    "one bad element cannot blank the viewport",
+    Object.values(afterBad).every(Number.isFinite) && (await somethingOnScreen()),
+    JSON.stringify(afterBad),
+  );
+
+  await page.evaluate(() => {
+    const app = window.axdraw;
+    app.state.zoom = NaN;
+    app.state.scrollX = NaN;
+    app.state.scrollY = NaN;
+  });
+  await page.evaluate(() => window.axdraw.zoomToFit());
+  await page.waitForTimeout(90);
+  const recovered = await viewport();
+  check(
+    "zoom to fit recovers an already-broken viewport",
+    Object.values(recovered).every(Number.isFinite),
+    JSON.stringify(recovered),
+  );
+
+  // JSON stores NaN as null, so a viewport that went bad once came back bad.
+  await page.evaluate(() => {
+    const raw = JSON.parse(localStorage.getItem("axdraw:state") || "{}");
+    raw.zoom = null;
+    raw.scrollX = null;
+    raw.scrollY = null;
+    localStorage.setItem("axdraw:state", JSON.stringify(raw));
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(900);
+  const reloaded = await viewport();
+  check(
+    "a persisted broken viewport is repaired on load",
+    Object.values(reloaded).every(Number.isFinite),
+    JSON.stringify(reloaded),
+  );
+
+  // A collaborator's elements used to go into the scene unchecked, while every
+  // other entry point normalised them. That is why this showed up in a shared
+  // room: one peer sending a malformed element was enough to break zoom to fit
+  // for everyone, and the damage persisted.
+  await resetView();
+  await page.evaluate(() => {
+    window.axdraw.applyRemoteScene(
+      [
+        {
+          id: "peer-bad",
+          type: "rectangle",
+          x: "not a number",
+          y: null,
+          width: undefined,
+          height: NaN,
+          angle: NaN,
+          version: 99,
+          updated: Date.now(),
+          seed: 1,
+        },
+      ],
+      {},
+    );
+  });
+  await page.waitForTimeout(90);
+  const ingested = await page.evaluate(() => {
+    const element = window.axdraw.elements.find((item) => item.id === "peer-bad");
+    return element && {
+      x: element.x,
+      y: element.y,
+      width: element.width,
+      height: element.height,
+      angle: element.angle,
+    };
+  });
+  check(
+    "a collaborator's malformed element is normalised on arrival",
+    !!ingested && Object.values(ingested).every(Number.isFinite),
+    JSON.stringify(ingested),
+  );
+
+  await page.evaluate(() => window.axdraw.zoomToFit());
+  await page.waitForTimeout(90);
+  const afterPeer = await page.evaluate(() => ({
+    zoom: window.axdraw.state.zoom,
+    scrollX: window.axdraw.state.scrollX,
+    scrollY: window.axdraw.state.scrollY,
+  }));
+  check(
+    "zoom to fit still works after a peer sends a bad element",
+    Object.values(afterPeer).every(Number.isFinite),
+    JSON.stringify(afterPeer),
+  );
+
+  // In a shared room, fitting *everything* is the wrong target: people work in
+  // different parts of the canvas, so it flies the viewport to whoever is
+  // furthest away and takes your own work off screen. The button you press when
+  // you are lost was the one losing you.
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([400, 300], [600, 420]);
+  await page.keyboard.press("v");
+  await page.evaluate(() => {
+    const app = window.axdraw;
+    app.state.selectedIds = new Set();
+    app.collab = { stub: true };
+    app.applyRemoteScene(
+      [
+        {
+          id: "peer-far",
+          type: "rectangle",
+          x: 2500,
+          y: 1200,
+          width: 300,
+          height: 200,
+          angle: 0,
+          version: 5,
+          updated: Date.now(),
+          seed: 2,
+          isDeleted: false,
+        },
+      ],
+      {},
+    );
+    app.state.zoom = 3;
+    app.state.scrollX = -4000;
+    app.state.scrollY = -4000;
+    app.render();
+  });
+
+  const framing = () =>
+    page.evaluate(() => {
+      const app = window.axdraw;
+      const view = app.viewport;
+      const onScreen = (element) => {
+        const x1 = (element.x + view.scrollX) * view.zoom;
+        const y1 = (element.y + view.scrollY) * view.zoom;
+        const x2 = (element.x + element.width + view.scrollX) * view.zoom;
+        const y2 = (element.y + element.height + view.scrollY) * view.zoom;
+        return x2 > 0 && x1 < view.width && y2 > 0 && y1 < view.height;
+      };
+      const mine = app.elements.find((element) => element.id !== "peer-far" && !element.isDeleted);
+      const peer = app.elements.find((element) => element.id === "peer-far");
+      return { mine: onScreen(mine), peer: onScreen(peer) };
+    });
+
+  await page.evaluate(() => window.axdraw.zoomToFit());
+  await page.waitForTimeout(80);
+  const firstPress = await framing();
+  check(
+    "zoom to fit frames your own work, not a collaborator's",
+    // Both halves matter: fitting everything also leaves your work on screen at
+    // this separation, so only "and not the far peer" proves it framed yours.
+    firstPress.mine && !firstPress.peer,
+    JSON.stringify(firstPress),
+  );
+
+  await page.evaluate(() => window.axdraw.zoomToFit());
+  await page.waitForTimeout(80);
+  const secondPress = await framing();
+  check(
+    "pressing again widens to everyone's work",
+    secondPress.mine && secondPress.peer,
+    JSON.stringify(secondPress),
+  );
+
+  // Selecting something is a more specific request than either.
+  await page.evaluate(() => {
+    window.axdraw.state.selectedIds = new Set(["peer-far"]);
+    window.axdraw.render();
+  });
+  await page.evaluate(() => window.axdraw.zoomToFit());
+  await page.waitForTimeout(80);
+  const selectionWins = await framing();
+  check("a selection still wins over both", selectionWins.peer, JSON.stringify(selectionWins));
+
+  await page.evaluate(() => {
+    window.axdraw.collab = null;
+    window.axdraw.state.selectedIds = new Set();
+  });
+
+  /* ---------------- stuck modifiers ---------------- */
+
+  // Modifiers are tracked from key events, so a key released while the page is
+  // not focused never reports going up. Alt-Tab away with Shift down and the
+  // editor thinks Shift is held forever: every shape comes out square and every
+  // line snaps to 45°, i.e. "everything I draw comes out diagonal".
+  await resetView();
+  await page.keyboard.down("Shift");
+  const heldModifiers = await page.evaluate(() => window.axdraw.shiftKey);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await page.waitForTimeout(60);
+  const afterBlur = await page.evaluate(() => ({
+    shift: window.axdraw.shiftKey,
+    alt: window.axdraw.altKey,
+    space: window.axdraw.spacePressed,
+  }));
+  await page.keyboard.up("Shift");
+  check(
+    "losing focus releases held modifiers",
+    heldModifiers && !afterBlur.shift && !afterBlur.alt && !afterBlur.space,
+    JSON.stringify({ heldModifiers, ...afterBlur }),
+  );
+
+  // Space is the pan modifier; stuck, it leaves the canvas permanently panning.
+  await page.keyboard.down("Space");
+  await page.waitForTimeout(60);
+  const spaceHeld = await page.evaluate(() => window.axdraw.spacePressed);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await page.waitForTimeout(60);
+  const spaceAfter = await page.evaluate(() => window.axdraw.spacePressed);
+  await page.keyboard.up("Space");
+  check("losing focus releases a held Space", spaceHeld && !spaceAfter, `${spaceHeld} -> ${spaceAfter}`);
+
+  // Shift must still constrain while it is genuinely down.
+  await resetView();
+  await page.keyboard.press("r");
+  await page.keyboard.down("Shift");
+  await drag([500, 350], [800, 450]);
+  await page.keyboard.up("Shift");
+  const constrained = (await scene()).last;
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([500, 350], [800, 450]);
+  const free = (await scene()).last;
+  check(
+    "Shift still constrains, and a plain drag does not",
+    Math.round(constrained.width) === Math.round(constrained.height) &&
+      Math.round(free.width) !== Math.round(free.height),
+    JSON.stringify({
+      shift: `${Math.round(constrained.width)}x${Math.round(constrained.height)}`,
+      plain: `${Math.round(free.width)}x${Math.round(free.height)}`,
+    }),
+  );
+
   /* ---------------- every button ---------------- */
 
   // Clicks every visible control in the chrome and checks the app survives it.

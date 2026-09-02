@@ -339,6 +339,10 @@ export class App {
     }
     this.state.selectedIds = new Set();
     this.state.editingTextId = null;
+    // A viewport that went non-finite was persisted as such (JSON turns NaN
+    // into null), so anyone already in that state would keep loading into a
+    // blank canvas. Repair on the way in.
+    this.ensureFiniteViewport();
     this.applyTheme();
   }
 
@@ -563,6 +567,16 @@ export class App {
 
     window.addEventListener("keydown", this.handleKeyDown);
     window.addEventListener("keyup", this.handleKeyUp);
+    // Modifiers are tracked from key events, and a key released while the page
+    // is not focused never sends one. Alt-Tab away with Shift down and the
+    // editor believes Shift is held for the rest of the session: every shape
+    // comes out square and every line snaps to 45°, which reads as "everything
+    // I draw comes out diagonal". Same for a stuck Space, which leaves the
+    // canvas in pan mode. Losing focus means we no longer know, so forget.
+    window.addEventListener("blur", this.releaseModifiers);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) this.releaseModifiers();
+    });
     window.addEventListener("resize", () => this.resize());
     window.addEventListener("paste", this.handlePaste);
     window.addEventListener("copy", this.handleCopyEvent);
@@ -1871,6 +1885,15 @@ export class App {
     this.altKey = event.altKey;
   };
 
+  /** Forget every held modifier. See the blur listener for why. */
+  private releaseModifiers = (): void => {
+    if (!this.shiftKey && !this.altKey && !this.spacePressed) return;
+    this.shiftKey = false;
+    this.altKey = false;
+    this.spacePressed = false;
+    this.updateCursor();
+  };
+
   private handleKeyDown = (event: KeyboardEvent): void => {
     const target = event.target as HTMLElement | null;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
@@ -2599,6 +2622,11 @@ export class App {
   }
 
   private zoomAt(zoom: number, screenX: number, screenY: number): void {
+    if (!Number.isFinite(zoom)) return;
+    this.fitEveryone = false;
+    // A viewport that has already gone bad would otherwise poison the result:
+    // NaN scroll plus a good zoom is still NaN scroll.
+    this.ensureFiniteViewport();
     const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
     const before = screenToScene(screenX, screenY, this.viewport);
     this.state.zoom = next;
@@ -2610,10 +2638,34 @@ export class App {
     this.notify();
   }
 
+  /**
+   * Put the viewport back in a usable state if it has become non-finite.
+   *
+   * Once zoom or scroll is NaN nothing renders, every later calculation stays
+   * NaN, and the value is persisted — so the canvas comes back empty after a
+   * reload with no way to navigate back to the drawing.
+   */
+  private ensureFiniteViewport(): void {
+    if (!Number.isFinite(this.state.zoom)) this.state.zoom = 1;
+    if (!Number.isFinite(this.state.scrollX)) this.state.scrollX = 0;
+    if (!Number.isFinite(this.state.scrollY)) this.state.scrollY = 0;
+  }
+
   private zoomToBounds(bounds: { x1: number; y1: number; x2: number; y2: number }): void {
-    const width = bounds.x2 - bounds.x1;
-    const height = bounds.y2 - bounds.y1;
-    if (width <= 0 || height <= 0) return;
+    // One element with a bad coordinate — from a peer, an import, or a
+    // half-loaded image — is enough to make the common bounds non-finite.
+    // Moving the viewport to that would blank the canvas irrecoverably, so
+    // leave it where the user can still see their work.
+    if (![bounds.x1, bounds.y1, bounds.x2, bounds.y2].every(Number.isFinite)) {
+      this.onError?.(t("Could not work out where the drawing is"));
+      return;
+    }
+    // A drawing that is a single horizontal or vertical line has zero extent on
+    // one axis. Bailing out left "zoom to fit" doing nothing at all, which is
+    // indistinguishable from the drawing having vanished; give it a minimum
+    // extent and fit that instead.
+    const width = Math.max(bounds.x2 - bounds.x1, 1);
+    const height = Math.max(bounds.y2 - bounds.y1, 1);
     const padding = 80;
     const zoom = Math.max(
       MIN_ZOOM,
@@ -2626,25 +2678,85 @@ export class App {
         ),
       ),
     );
-    this.state.zoom = Math.min(zoom, 1.5);
-    this.state.scrollX = this.container.clientWidth / (2 * this.state.zoom) - (bounds.x1 + bounds.x2) / 2;
-    this.state.scrollY = this.container.clientHeight / (2 * this.state.zoom) - (bounds.y1 + bounds.y2) / 2;
+    const nextZoom = Math.min(zoom, 1.5);
+    const nextScrollX = this.container.clientWidth / (2 * nextZoom) - (bounds.x1 + bounds.x2) / 2;
+    const nextScrollY = this.container.clientHeight / (2 * nextZoom) - (bounds.y1 + bounds.y2) / 2;
+    // Last line of defence: a zero-size container (a hidden tab) makes these
+    // infinite, and writing that is what makes the state unrecoverable.
+    if (![nextZoom, nextScrollX, nextScrollY].every(Number.isFinite)) return;
+    this.state.zoom = nextZoom;
+    this.state.scrollX = nextScrollX;
+    this.state.scrollY = nextScrollY;
     this.scheduleRender();
     this.schedulePersist();
     this.notify();
   }
 
+  /** Elements a viewport fit can actually be computed from. */
+  private measurable(elements: readonly AxElement[]): AxElement[] {
+    return elements.filter(
+      (element) =>
+        !element.isDeleted &&
+        Number.isFinite(element.x) &&
+        Number.isFinite(element.y) &&
+        Number.isFinite(element.width) &&
+        Number.isFinite(element.height),
+    );
+  }
+
+  /**
+   * Frame the drawing.
+   *
+   * In a shared room "everything" is the wrong target. People work in
+   * different parts of the canvas, so fitting every element flies the viewport
+   * off to whoever is furthest away and takes your own work off screen — the
+   * button you press when you are lost is the one that loses you. Fit what you
+   * drew; only fall back to the whole room when you have drawn nothing yet.
+   *
+   * A selection is a more specific answer still, so it wins over both.
+   */
   zoomToFit(): void {
-    const visible = this.elements.filter((element) => !element.isDeleted);
+    // Skipping unmeasurable elements rather than failing on them means one bad
+    // shape costs you that shape, not the ability to find the rest.
+    const visible = this.measurable(this.elements);
     if (!visible.length) {
+      this.ensureFiniteViewport();
       this.setZoom(1);
       return;
     }
+
+    const selected = this.measurable(this.getSelectedElements());
+    if (selected.length) {
+      this.zoomToBounds(getCommonBounds(selected));
+      return;
+    }
+
+    if (this.collab && !this.fitEveryone) {
+      const mine = visible.filter((element) => !this.remoteElementIds.has(element.id));
+      if (mine.length && mine.length < visible.length) {
+        this.zoomToBounds(getCommonBounds(mine));
+        // Pressing again widens to the whole room, so "show me everything" is
+        // still one press away rather than gone.
+        this.fitEveryone = true;
+        this.onMessage?.(t("Fitted your drawing — press again to fit everyone's"));
+        return;
+      }
+    }
+
+    this.fitEveryone = false;
     this.zoomToBounds(getCommonBounds(visible));
   }
 
+  /**
+   * Set after a fit that deliberately ignored collaborators' work, so the next
+   * press widens instead of repeating. Any other viewport change clears it —
+   * the offer only makes sense immediately after the narrow fit.
+   */
+  private fitEveryone = false;
+
   zoomToSelection(): void {
-    const selected = this.getSelectedElements();
+    this.fitEveryone = false;
+    const selected = this.measurable(this.getSelectedElements());
     if (!selected.length) {
       this.zoomToFit();
       return;
@@ -2836,7 +2948,12 @@ export class App {
   applyRemoteScene(remote: readonly AxElement[], files: BinaryFiles): void {
     const merged = new Map<string, AxElement>();
     for (const element of this.elements) merged.set(element.id, element);
-    for (const element of remote) {
+    for (const raw of remote) {
+      // Every other way elements enter the scene — opening a file, loading a
+      // shared link, restoring from storage — runs them through the normaliser.
+      // This path did not, so whatever a peer sent went straight in, including
+      // geometry the rest of the editor cannot work with.
+      const element = normalizeImportedElement(raw as unknown as Record<string, unknown>);
       if (!merged.has(element.id)) this.remoteElementIds.add(element.id);
       const local = merged.get(element.id);
       if (
@@ -2914,9 +3031,14 @@ export class App {
   }
 
   async exportPng(options: { scale?: number; background?: boolean; selectionOnly?: boolean } = {}): Promise<void> {
-    const elements = options.selectionOnly ? this.getSelectedElements() : this.elements;
+    // this.elements keeps tombstones for deleted items, so filtering matters:
+    // without it a cleared canvas counts as non-empty and exports a blank file
+    // instead of saying there is nothing to export.
+    const elements = options.selectionOnly
+      ? this.getSelectedElements()
+      : this.elements.filter((element) => !element.isDeleted);
     if (!elements.length) {
-      this.onError?.("Nothing to export");
+      this.onError?.(t("Nothing to export"));
       return;
     }
     const blob = await exportToBlob(elements, this.files, {
@@ -2929,9 +3051,14 @@ export class App {
   }
 
   exportSvg(options: { scale?: number; background?: boolean; selectionOnly?: boolean } = {}): void {
-    const elements = options.selectionOnly ? this.getSelectedElements() : this.elements;
+    // this.elements keeps tombstones for deleted items, so filtering matters:
+    // without it a cleared canvas counts as non-empty and exports a blank file
+    // instead of saying there is nothing to export.
+    const elements = options.selectionOnly
+      ? this.getSelectedElements()
+      : this.elements.filter((element) => !element.isDeleted);
     if (!elements.length) {
-      this.onError?.("Nothing to export");
+      this.onError?.(t("Nothing to export"));
       return;
     }
     const svg = exportToSvgString(elements, this.files, {
