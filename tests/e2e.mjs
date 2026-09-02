@@ -968,6 +968,93 @@ try {
     JSON.stringify(afterPeer),
   );
 
+  // In a shared room, fitting *everything* is the wrong target: people work in
+  // different parts of the canvas, so it flies the viewport to whoever is
+  // furthest away and takes your own work off screen. The button you press when
+  // you are lost was the one losing you.
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([400, 300], [600, 420]);
+  await page.keyboard.press("v");
+  await page.evaluate(() => {
+    const app = window.axdraw;
+    app.state.selectedIds = new Set();
+    app.collab = { stub: true };
+    app.applyRemoteScene(
+      [
+        {
+          id: "peer-far",
+          type: "rectangle",
+          x: 2500,
+          y: 1200,
+          width: 300,
+          height: 200,
+          angle: 0,
+          version: 5,
+          updated: Date.now(),
+          seed: 2,
+          isDeleted: false,
+        },
+      ],
+      {},
+    );
+    app.state.zoom = 3;
+    app.state.scrollX = -4000;
+    app.state.scrollY = -4000;
+    app.render();
+  });
+
+  const framing = () =>
+    page.evaluate(() => {
+      const app = window.axdraw;
+      const view = app.viewport;
+      const onScreen = (element) => {
+        const x1 = (element.x + view.scrollX) * view.zoom;
+        const y1 = (element.y + view.scrollY) * view.zoom;
+        const x2 = (element.x + element.width + view.scrollX) * view.zoom;
+        const y2 = (element.y + element.height + view.scrollY) * view.zoom;
+        return x2 > 0 && x1 < view.width && y2 > 0 && y1 < view.height;
+      };
+      const mine = app.elements.find((element) => element.id !== "peer-far" && !element.isDeleted);
+      const peer = app.elements.find((element) => element.id === "peer-far");
+      return { mine: onScreen(mine), peer: onScreen(peer) };
+    });
+
+  await page.evaluate(() => window.axdraw.zoomToFit());
+  await page.waitForTimeout(80);
+  const firstPress = await framing();
+  check(
+    "zoom to fit frames your own work, not a collaborator's",
+    // Both halves matter: fitting everything also leaves your work on screen at
+    // this separation, so only "and not the far peer" proves it framed yours.
+    firstPress.mine && !firstPress.peer,
+    JSON.stringify(firstPress),
+  );
+
+  await page.evaluate(() => window.axdraw.zoomToFit());
+  await page.waitForTimeout(80);
+  const secondPress = await framing();
+  check(
+    "pressing again widens to everyone's work",
+    secondPress.mine && secondPress.peer,
+    JSON.stringify(secondPress),
+  );
+
+  // Selecting something is a more specific request than either.
+  await page.evaluate(() => {
+    window.axdraw.state.selectedIds = new Set(["peer-far"]);
+    window.axdraw.render();
+  });
+  await page.evaluate(() => window.axdraw.zoomToFit());
+  await page.waitForTimeout(80);
+  const selectionWins = await framing();
+  check("a selection still wins over both", selectionWins.peer, JSON.stringify(selectionWins));
+
+  await page.evaluate(() => {
+    window.axdraw.collab = null;
+    window.axdraw.state.selectedIds = new Set();
+  });
+
   /* ---------------- stuck modifiers ---------------- */
 
   // Modifiers are tracked from key events, so a key released while the page is

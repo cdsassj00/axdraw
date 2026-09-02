@@ -2623,6 +2623,7 @@ export class App {
 
   private zoomAt(zoom: number, screenX: number, screenY: number): void {
     if (!Number.isFinite(zoom)) return;
+    this.fitEveryone = false;
     // A viewport that has already gone bad would otherwise poison the result:
     // NaN scroll plus a good zoom is still NaN scroll.
     this.ensureFiniteViewport();
@@ -2703,6 +2704,17 @@ export class App {
     );
   }
 
+  /**
+   * Frame the drawing.
+   *
+   * In a shared room "everything" is the wrong target. People work in
+   * different parts of the canvas, so fitting every element flies the viewport
+   * off to whoever is furthest away and takes your own work off screen — the
+   * button you press when you are lost is the one that loses you. Fit what you
+   * drew; only fall back to the whole room when you have drawn nothing yet.
+   *
+   * A selection is a more specific answer still, so it wins over both.
+   */
   zoomToFit(): void {
     // Skipping unmeasurable elements rather than failing on them means one bad
     // shape costs you that shape, not the ability to find the rest.
@@ -2712,10 +2724,38 @@ export class App {
       this.setZoom(1);
       return;
     }
+
+    const selected = this.measurable(this.getSelectedElements());
+    if (selected.length) {
+      this.zoomToBounds(getCommonBounds(selected));
+      return;
+    }
+
+    if (this.collab && !this.fitEveryone) {
+      const mine = visible.filter((element) => !this.remoteElementIds.has(element.id));
+      if (mine.length && mine.length < visible.length) {
+        this.zoomToBounds(getCommonBounds(mine));
+        // Pressing again widens to the whole room, so "show me everything" is
+        // still one press away rather than gone.
+        this.fitEveryone = true;
+        this.onMessage?.(t("Fitted your drawing — press again to fit everyone's"));
+        return;
+      }
+    }
+
+    this.fitEveryone = false;
     this.zoomToBounds(getCommonBounds(visible));
   }
 
+  /**
+   * Set after a fit that deliberately ignored collaborators' work, so the next
+   * press widens instead of repeating. Any other viewport change clears it —
+   * the offer only makes sense immediately after the narrow fit.
+   */
+  private fitEveryone = false;
+
   zoomToSelection(): void {
+    this.fitEveryone = false;
     const selected = this.measurable(this.getSelectedElements());
     if (!selected.length) {
       this.zoomToFit();
