@@ -276,6 +276,16 @@ export function createUI(app: App): void {
       }),
       button({ icon: iconEl("plus"), title: "Zoom in — Ctrl++", onClick: () => app.setZoom(app.state.zoom * 1.1) }),
       button({ icon: iconEl("zoomReset"), title: "Zoom to fit — Shift+1", onClick: () => app.zoomToFit() }),
+      button({
+        icon: iconEl("locate"),
+        title: t("Find drawings"),
+        onClick: (event) => {
+          event.stopPropagation();
+          // Anchor on the button, not the island: the island's left edge sits
+          // under the tool rail, and the popover would cover it.
+          openClusterList(app, root, event.currentTarget as HTMLElement);
+        },
+      }),
     ]);
 
     const historyIsland = h("div", { class: "island", style: { display: "flex", gap: "2px", padding: "4px" } }, [
@@ -982,6 +992,69 @@ function boardNameField(app: App): HTMLInputElement {
   });
   input.addEventListener("blur", commit);
   return input;
+}
+
+/**
+ * "Find drawings" — jump between the islands of work on the board.
+ *
+ * Zoom to fit answers "show me everything", which stops being useful once a
+ * board is big: fitting everything fits the empty space between the drawings
+ * too, and you get a screen of specks. This answers the question people
+ * actually have, which is "where did I put it".
+ */
+function openClusterList(app: App, root: HTMLElement, anchor: HTMLElement): void {
+  const clusters = app.listClusters();
+  if (clusters.length <= 1) {
+    // One island means zoom-to-fit already does the job; say so rather than
+    // opening a list with a single row in it.
+    app.zoomToFit();
+    return;
+  }
+
+  let close = () => {};
+  const rows = clusters.slice(0, 30).map((cluster, index) => {
+    const width = Math.round(cluster.bounds.x2 - cluster.bounds.x1);
+    const height = Math.round(cluster.bounds.y2 - cluster.bounds.y1);
+    const types = [...new Set(cluster.elements.map((element) => element.type))].slice(0, 3).join(", ");
+    return h(
+      "button",
+      {
+        class: "cluster-row",
+        type: "button",
+        onclick: () => {
+          app.zoomToCluster(index);
+          close();
+        },
+      },
+      [
+        h("span", { class: "cluster-count", text: `${cluster.elements.length} ${t("elements")}` }),
+        h("span", { class: "cluster-meta", text: `${types} · ${width}×${height}` }),
+      ],
+    );
+  });
+
+  const existing = root.querySelector<HTMLElement>(".cluster-popover");
+  if (existing) {
+    existing.remove();
+    return;
+  }
+
+  const popover = h("div", { class: "island cluster-popover" }, [
+    h("div", { class: "cluster-title", text: `${t("Find drawings")} · ${clusters.length}` }),
+    ...rows,
+  ]);
+  const rect = anchor.getBoundingClientRect();
+  // Sits above the zoom island, which lives at the bottom of the window.
+  popover.style.left = `${rect.left}px`;
+  popover.style.bottom = `${window.innerHeight - rect.top + 8}px`;
+
+  let dispose = () => {};
+  close = () => {
+    dispose();
+    popover.remove();
+  };
+  root.appendChild(popover);
+  dispose = dismissable(popover, close);
 }
 
 /** Boards — every canvas saved in this browser, newest first. */

@@ -1055,6 +1055,109 @@ try {
     window.axdraw.state.selectedIds = new Set();
   });
 
+  /* ---------------- find drawings ---------------- */
+
+  // Zoom to fit answers "show me everything", which stops being useful on a
+  // large board: fitting everything fits the empty space between the drawings
+  // too. This answers "where did I put it".
+  await resetView();
+  await page.evaluate(() => {
+    const app = window.axdraw;
+    let n = 0;
+    // Full element shape: the renderer reads groupIds, roundness and the style
+    // fields directly, and a half-built element throws once it is drawn.
+    const make = (x, y) => ({
+      id: "cluster-" + n++, type: "rectangle", x, y, width: 120, height: 80,
+      angle: 0, version: 1, updated: Date.now(), seed: 1, isDeleted: false,
+      strokeColor: "#1e1e1e", backgroundColor: "transparent", fillStyle: "hachure",
+      strokeWidth: 1, strokeStyle: "solid", roughness: 1, opacity: 100,
+      groupIds: [], roundness: null, boundElements: null, frameId: null,
+      locked: false, link: null,
+    });
+    const elements = [];
+    for (let i = 0; i < 900; i++) elements.push(make((i % 30) * 150, Math.floor(i / 30) * 110));
+    for (let i = 0; i < 200; i++) elements.push(make(9000 + (i % 20) * 150, 4000 + Math.floor(i / 20) * 110));
+    for (let i = 0; i < 53; i++) elements.push(make(-6000 + (i % 10) * 150, 60000 + Math.floor(i / 10) * 110));
+    app.elements = elements;
+    app.state.selectedIds = new Set();
+    // Park the viewport far from everything, the state people get stuck in.
+    app.state.zoom = 0.3;
+    app.state.scrollX = 34319;
+    app.state.scrollY = -810713;
+    app.render();
+  });
+
+  const visibleCount = () =>
+    page.evaluate(() => {
+      const app = window.axdraw;
+      const view = app.viewport;
+      return app.elements.filter((element) => !element.isDeleted).filter((element) => {
+        const x1 = (element.x + view.scrollX) * view.zoom;
+        const y1 = (element.y + view.scrollY) * view.zoom;
+        const x2 = (element.x + element.width + view.scrollX) * view.zoom;
+        const y2 = (element.y + element.height + view.scrollY) * view.zoom;
+        return x2 > 0 && x1 < view.width && y2 > 0 && y1 < view.height;
+      }).length;
+    });
+
+  const sizes = await page.evaluate(() => window.axdraw.listClusters().map((c) => c.elements.length));
+  check(
+    "islands of work are found, largest first",
+    JSON.stringify(sizes) === JSON.stringify([900, 200, 53]),
+    JSON.stringify(sizes),
+  );
+
+  check("nothing is on screen to start with", (await visibleCount()) === 0);
+
+  const finder = 'button[title*="찾"], button[title*="Find"]';
+  await page.click(finder);
+  await page.waitForTimeout(120);
+  const rows = await page.evaluate(() =>
+    [...document.querySelectorAll(".cluster-row")].map((row) => row.textContent.trim()),
+  );
+  check("the finder lists every island", rows.length === 3, JSON.stringify(rows));
+
+  // The popover must clear the tool rail, or its rows cannot be clicked.
+  const overlaps = await page.evaluate(() => {
+    const pop = document.querySelector(".cluster-popover").getBoundingClientRect();
+    const rail = document.querySelector(".toolbar").getBoundingClientRect();
+    return pop.left < rail.right && pop.top < rail.bottom;
+  });
+  check("the finder does not cover the toolbar", !overlaps);
+
+  await page.click(".cluster-row");
+  await page.waitForTimeout(150);
+  const jumped = await visibleCount();
+  check(
+    "picking an island jumps to it and selects it",
+    jumped === 900 && (await page.evaluate(() => window.axdraw.state.selectedIds.size)) === 900,
+    `${jumped} on screen`,
+  );
+  check(
+    "the finder closes after picking",
+    await page.evaluate(() => !document.querySelector(".cluster-popover")),
+  );
+
+  // With a single island there is nothing to choose between, so it just fits.
+  await page.evaluate(() => {
+    const app = window.axdraw;
+    app.elements = app.elements.slice(0, 50);
+    app.state.zoom = 0.1;
+    app.state.scrollX = 90000;
+    app.state.scrollY = 90000;
+    app.render();
+  });
+  await page.click(finder);
+  await page.waitForTimeout(150);
+  check(
+    "one island skips the list and just fits",
+    !(await page.evaluate(() => !!document.querySelector(".cluster-popover"))) &&
+      (await visibleCount()) === 50,
+    `${await visibleCount()} on screen`,
+  );
+
+  await resetView();
+
   /* ---------------- stuck modifiers ---------------- */
 
   // Modifiers are tracked from key events, so a key released while the page is

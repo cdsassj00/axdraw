@@ -105,6 +105,7 @@ import {
 import { History } from "./history";
 import { FILE_CARD_HEIGHT, FILE_CARD_WIDTH } from "./element/filecard";
 import { clearShapeCache } from "./element/shapes";
+import { findClusters, type Cluster } from "./element/clusters";
 import {
   downloadBlob,
   exportToBlob,
@@ -2753,6 +2754,27 @@ export class App {
    * the offer only makes sense immediately after the narrow fit.
    */
   private fitEveryone = false;
+
+  /**
+   * Islands of work on the board, largest first. Recomputed on demand: it is
+   * linear in the element count and only runs when the list is opened.
+   */
+  listClusters(): Cluster[] {
+    return findClusters(this.elements);
+  }
+
+  /** Frame one island and select it, so it is obvious what was jumped to. */
+  zoomToCluster(index: number): void {
+    const clusters = this.listClusters();
+    if (!clusters.length) {
+      this.onError?.(t("Nothing to find"));
+      return;
+    }
+    const cluster = clusters[((index % clusters.length) + clusters.length) % clusters.length];
+    this.state.selectedIds = new Set(cluster.elements.map((element) => element.id));
+    this.zoomToBounds(cluster.bounds);
+    this.notify();
+  }
 
   zoomToSelection(): void {
     this.fitEveryone = false;

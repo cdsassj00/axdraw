@@ -78,6 +78,7 @@ export const COMMANDS: Command[] = [
 
   // View
   { id: "view.zoomFit", label: "Zoom to fit", ko: "전체 맞춤", group: "보기", shortcut: "Shift+1", run: (a) => a.zoomToFit() },
+  { id: "view.findDrawings", label: "Find drawings", ko: "그림 찾기", group: "보기", run: (a) => a.zoomToCluster(0) },
   { id: "view.zoomSelection", label: "Zoom to selection", ko: "선택 영역 맞춤", group: "보기", shortcut: "Shift+2", run: (a) => a.zoomToSelection(), enabled: hasSelection },
   { id: "view.zoom100", label: "Reset zoom to 100%", ko: "확대 100%", group: "보기", shortcut: "Ctrl+0", run: (a) => a.setZoom(1) },
   { id: "view.grid", label: "Toggle grid", ko: "격자 전환", group: "보기", shortcut: "Ctrl+'", run: (a) => a.toggleGrid() },
