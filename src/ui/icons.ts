@@ -54,6 +54,9 @@ export const icons: Record<string, string> = {
   flipV: wrap('<path d="M3.5 12h17"/><path d="M7 9 12 4l5 5z"/><path d="M7 15l5 5 5-5z"/>'),
   zoomReset: wrap('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>'),
   close: wrap('<path d="M6 6l12 12M18 6 6 18"/>'),
+  // Crosshair over scattered marks: "find the drawings", distinct from the
+  // magnifier next to it, which fits everything.
+  locate: wrap('<circle cx="12" cy="12" r="4"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/>'),
   wand: wrap('<path d="M4 20 15 9"/><path d="M17 3.5v3M20.5 5.5l-2 2M21 10h-3"/><path d="m13.5 6.5 4 4"/>'),
   grid: wrap('<path d="M3.5 9h17M3.5 15h17M9 3.5v17M15 3.5v17"/>'),
   check: wrap('<path d="m5 12.5 4.5 4.5L19 7"/>'),
