@@ -124,6 +124,8 @@ import {
 } from "./scene/interactive";
 import { renderStaticScene, screenToScene, type Viewport } from "./scene/renderer";
 import {
+  appendToBoard,
+  removeFromBoard,
   clearStoredScene,
   createBoard,
   currentBoardId,
@@ -313,6 +315,8 @@ export class App {
 
   /** Record a history step, persist, re-render and refresh the UI. */
   commit(): void {
+    // Only an undo taken straight after the move can unwind the far canvas.
+    if (!this.movingSelection) this.lastMove = null;
     this.collab?.queueBroadcast();
     this.history.record(this.elements, this.state.selectedIds);
     this.scheduleRender();
@@ -2496,7 +2500,14 @@ export class App {
 
   undo(): void {
     const entry = this.history.undo();
-    if (entry) this.applyHistoryEntry(entry);
+    if (!entry) return;
+    // A move wrote to a board this history does not cover, so undoing only the
+    // local half would leave the elements on both canvases. Unwind the far
+    // side too, or the "moved" elements quietly become duplicates.
+    const move = this.lastMove;
+    this.lastMove = null;
+    if (move) removeFromBoard(move.boardId, move.ids);
+    this.applyHistoryEntry(entry);
   }
 
   redo(): void {
@@ -2559,6 +2570,50 @@ export class App {
   deleteSelection(): void {
     if (!this.state.selectedIds.size) return;
     this.applySlice(deleteSelected(this.slice()));
+  }
+
+  /**
+   * Moves the selection onto another canvas.
+   *
+   * Splitting a canvas that has become a pile of unrelated work is otherwise
+   * a copy, switch, paste, switch back, delete round trip per cluster. The
+   * removal goes through the normal delete path, so it is undoable and, in a
+   * room, broadcast as a tombstone rather than a silent disappearance.
+   *
+   * Pass null to send the selection to a brand new canvas.
+   */
+  moveSelectionToBoard(boardId: string | null): void {
+    const selected = this.getSelectedElements();
+    if (!selected.length) return;
+
+    const target = boardId ?? createBoard().id;
+    if (target === currentBoardId()) return;
+
+    // Only the files the moved elements actually reference.
+    const wanted = new Set(
+      selected.map((element) => (element as { fileId?: string }).fileId).filter(Boolean) as string[],
+    );
+    const files: BinaryFiles = {};
+    for (const id of wanted) {
+      const file = this.files[id];
+      if (file) files[id] = file;
+    }
+
+    try {
+      appendToBoard(target, selected, files);
+    } catch (error) {
+      this.onError?.(error instanceof Error ? error.message : "Could not move to that canvas");
+      return;
+    }
+
+    this.movingSelection = true;
+    this.deleteSelection();
+    this.movingSelection = false;
+    this.lastMove = { boardId: target, ids: selected.map((element) => element.id) };
+
+    const name = listBoards().find((board) => board.id === target)?.name ?? "";
+    this.onMessage?.(`${selected.length}개를 "${name}"(으)로 옮겼습니다`);
+    this.notify();
   }
 
   duplicate(): void {
@@ -2932,6 +2987,9 @@ export class App {
    * ---------------------------------------------------------------- */
 
   collab: CollabSession | null = null;
+  /** The most recent cross-canvas move, while an undo could still unwind it. */
+  private lastMove: { boardId: string; ids: string[] } | null = null;
+  private movingSelection = false;
   /** Ids first seen in a peer broadcast — my undo must never delete these. */
   private remoteElementIds = new Set<string>();
 

@@ -129,6 +129,57 @@ export function createBoard(): BoardMeta {
   return board;
 }
 
+/**
+ * Appends elements to a board that is not open.
+ *
+ * Splitting a crowded canvas means taking a slice of it somewhere else, and
+ * loading the target board just to add to it would throw away whatever is on
+ * screen. Coordinates are kept exactly as they are so a cluster lands in the
+ * same relative arrangement it had.
+ */
+export function appendToBoard(
+  boardId: string,
+  elements: readonly AxElement[],
+  files: BinaryFiles,
+): void {
+  try {
+    const raw = localStorage.getItem(sceneKey(boardId));
+    const existing = raw
+      ? (JSON.parse(raw) as { elements?: AxElement[]; files?: BinaryFiles })
+      : { elements: [], files: {} };
+    const payload = {
+      version: SCENE_VERSION,
+      elements: [...(existing.elements ?? []), ...elements.filter((element) => !element.isDeleted)],
+      files: { ...(existing.files ?? {}), ...files },
+    };
+    localStorage.setItem(sceneKey(boardId), JSON.stringify(payload));
+    touchBoard(boardId);
+  } catch {
+    // Quota or unavailable storage — the caller reports the failure.
+    throw new Error("Could not write to that canvas");
+  }
+}
+
+/** Removes elements from a board that is not open — undo of appendToBoard. */
+export function removeFromBoard(boardId: string, ids: readonly string[]): void {
+  try {
+    const raw = localStorage.getItem(sceneKey(boardId));
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as { elements?: AxElement[]; files?: BinaryFiles };
+    const drop = new Set(ids);
+    localStorage.setItem(
+      sceneKey(boardId),
+      JSON.stringify({
+        version: SCENE_VERSION,
+        elements: (parsed.elements ?? []).filter((element) => !drop.has(element.id)),
+        files: parsed.files ?? {},
+      }),
+    );
+  } catch {
+    // Nothing safe to do; the caller cannot recover either.
+  }
+}
+
 export function deleteBoard(id: string): void {
   writeIndex(readIndex().filter((board) => board.id !== id));
   try {

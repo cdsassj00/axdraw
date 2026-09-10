@@ -1242,6 +1242,87 @@ try {
   await page.evaluate(() => localStorage.removeItem("axdraw:rooms"));
   await resetView();
 
+  /* ---------------- moving work between canvases ---------------- */
+
+  // Splitting a canvas that has become a pile of unrelated work. The far
+  // board is not open, so nothing but this can verify it was written.
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForTimeout(500);
+
+  const addBox = async (x, y) => {
+    await page.keyboard.press("2");
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + 80, y + 80);
+    await page.mouse.up();
+    await page.waitForTimeout(120);
+  };
+  const liveCount = () =>
+    page.evaluate(() => window.axdraw.elements.filter((e) => !e.isDeleted).length);
+  const otherBoard = () =>
+    page.evaluate(() => window.axdraw.listBoards().find((b) => b.id !== window.axdraw.currentBoardId()).id);
+
+  await addBox(300, 300);
+  await addBox(500, 300);
+  await addBox(700, 300);
+  await page.evaluate(() => {
+    const app = window.axdraw;
+    const live = app.elements.filter((e) => !e.isDeleted);
+    app.state.selectedIds = new Set([live[0].id, live[1].id]);
+    app.render();
+  });
+  await page.evaluate(() => window.axdraw.moveSelectionToBoard(null));
+  await page.waitForTimeout(300);
+  check("moving takes the selection off this canvas", (await liveCount()) === 1, `${await liveCount()} left`);
+
+  const moved = await page.evaluate(async () => {
+    const app = window.axdraw;
+    const target = app.listBoards().find((b) => b.id !== app.currentBoardId()).id;
+    app.openBoard(target);
+    return app.elements.filter((e) => !e.isDeleted).map((e) => Math.round(e.x));
+  });
+  check(
+    "the elements land on the target canvas, coordinates intact",
+    moved.length === 2 && moved.includes(300) && moved.includes(500),
+    JSON.stringify(moved),
+  );
+
+  // Undo has to unwind the far canvas too, or the "moved" elements silently
+  // exist on both and the split quietly duplicates work.
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForTimeout(500);
+  await addBox(300, 300);
+  await addBox(500, 300);
+  await addBox(700, 300);
+  await page.evaluate(() => {
+    const app = window.axdraw;
+    const live = app.elements.filter((e) => !e.isDeleted);
+    app.state.selectedIds = new Set([live[0].id, live[1].id]);
+    app.render();
+  });
+  await page.evaluate(() => window.axdraw.moveSelectionToBoard(null));
+  await page.waitForTimeout(250);
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(350);
+  check("undo brings the selection back", (await liveCount()) === 3, `${await liveCount()} on the source`);
+
+  const targetAfterUndo = await page.evaluate(async (id) => {
+    window.axdraw.openBoard(id);
+    return window.axdraw.elements.filter((e) => !e.isDeleted).length;
+  }, await otherBoard());
+  check(
+    "undo leaves no copy behind on the target",
+    targetAfterUndo === 0,
+    `${targetAfterUndo} on the target`,
+  );
+
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForTimeout(500);
+  await resetView();
+
   /* ---------------- joining a room ---------------- */
 
   // Joining used to keep the board that was already open, and the first
