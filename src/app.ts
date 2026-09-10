@@ -137,6 +137,7 @@ import {
 } from "./scene/storage";
 import { createShareLink, loadSharedScene } from "./scene/share";
 import { CollabSession, ROOM_HASH_PATTERN } from "./scene/collab";
+import { renameRecentRoom, roomBoardId, setRoomBoard } from "./scene/recentRooms";
 import { t } from "./i18n";
 import type {
   AppState,
@@ -2846,6 +2847,9 @@ export class App {
     if (!trimmed) return;
     if (trimmed === listBoards().find((board) => board.id === id)?.name) return;
     renameBoard(id, trimmed);
+    // The recent-rooms list labels rooms by the board name they were seen
+    // under, so a rename while connected should follow.
+    if (this.collab) renameRecentRoom(this.collab.id, trimmed);
     this.notify();
   }
 
@@ -2950,11 +2954,37 @@ export class App {
     this.onMessage?.(t("Left the collaboration room"));
   }
 
+  /**
+   * Gives a room its own canvas.
+   *
+   * Joining used to keep whatever board was already open, and the first
+   * broadcast then pushed that board's elements into the room — so everyone's
+   * private notes piled up on top of each other in the shared space. A room
+   * gets its own board instead: the user's own work stays where they left it,
+   * and the room starts from what the peers send. Rejoining reuses the same
+   * board, so the room's history is not scattered across new canvases.
+   */
+  private enterRoomBoard(roomId: string, keyText: string): void {
+    const existing = roomBoardId(roomId);
+    if (existing && listBoards().some((board) => board.id === existing)) {
+      if (currentBoardId() !== existing) this.openBoard(existing);
+      return;
+    }
+    saveScene(this.elements, this.files, this.state);
+    const board = createBoard();
+    renameBoard(board.id, `협업 ${roomId.slice(0, 6)}`);
+    this.openBoard(board.id);
+    setRoomBoard(roomId, keyText, board.id);
+  }
+
   /** Joins a room when the page was opened through a #room=… link. */
   async joinCollabFromHash(): Promise<void> {
     const match = ROOM_HASH_PATTERN.exec(location.hash);
     if (!match || this.collab) return;
     try {
+      // Before connecting: openBoard() stops any session, and the socket
+      // broadcasts on open, so the right board must already be current.
+      this.enterRoomBoard(match[1], match[2]);
       this.collab = await CollabSession.join(this, match[1], match[2]);
       this.onMessage?.(t("Joined the collaboration room"));
     } catch (error) {

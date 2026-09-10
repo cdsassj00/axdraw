@@ -59,6 +59,10 @@ try {
     // built to degrade to fallback stacks, so those load failures are noise.
     const url = message.location()?.url ?? "";
     if (/fonts\.googleapis|fonts\.gstatic|cdn\.jsdelivr|googletagmanager/.test(url)) return;
+    // The join tests deliberately enter a room; `vite preview` serves the
+    // static build with no relay behind it, so the handshake for that one
+    // test room is expected to fail. Any other room id is a real error.
+    if (message.text().includes("/api/rooms/e2eroom000001/ws")) return;
     if (message.type() === "error") errors.push(message.text());
   });
 
@@ -1156,6 +1160,161 @@ try {
     `${await visibleCount()} on screen`,
   );
 
+  await resetView();
+
+  /* ---------------- recent rooms ---------------- */
+
+  // A room is a relay: nothing about it is stored server-side, and the key
+  // lives only in the URL fragment. Lose the link and the room is gone, so
+  // the local list is the only way back — it has to actually round-trip.
+  const openRooms = async () => {
+    await openMenu();
+    await page.evaluate(() => {
+      [...document.querySelectorAll(".dropdown-item")]
+        .find((node) => node.textContent.trim().startsWith("Recent rooms"))
+        ?.click();
+    });
+    await page.waitForTimeout(90);
+  };
+  const closeModal = () =>
+    page.evaluate(() => document.querySelector(".modal-backdrop")?.remove());
+
+  await page.evaluate(() => localStorage.removeItem("axdraw:rooms"));
+  await openRooms();
+  check("an untouched browser lists no rooms", await page.evaluate(() => !!document.querySelector(".rooms-empty")));
+  await closeModal();
+
+  // Seed through localStorage, the same shape the collab session writes.
+  await page.evaluate(() => {
+    const now = Date.now();
+    localStorage.setItem(
+      "axdraw:rooms",
+      JSON.stringify([
+        { id: "bbbb2222", key: "K3yBytesBBB", name: "두 번째 방", visited: now - 5000 },
+        { id: "aaaa1111", key: "K3yBytesAAA", name: "첫 번째 방", visited: now },
+      ]),
+    );
+  });
+
+  await openRooms();
+  const roomRows = await page.evaluate(() =>
+    [...document.querySelectorAll(".modal .board-name")].map((el) => el.textContent),
+  );
+  check(
+    "the dialog lists remembered rooms, newest first",
+    roomRows.length === 2 && roomRows[0] === "첫 번째 방",
+    JSON.stringify(roomRows),
+  );
+
+  // The rebuilt link has to carry the key: a room id alone opens nothing.
+  const link = await page.evaluate(async () => {
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: (text) => ((copied = text), Promise.resolve()) },
+    });
+    const rows = [...document.querySelectorAll(".modal .board-row")];
+    rows[0].querySelector(".board-rename").click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    return copied;
+  });
+  check(
+    "copying a room rebuilds a full link, key included",
+    link.endsWith("#room=aaaa1111,K3yBytesAAA"),
+    link.slice(link.indexOf("#")) || "(nothing copied)",
+  );
+
+  await page.evaluate(() => {
+    const rows = [...document.querySelectorAll(".modal .board-row")];
+    rows[0].querySelector(".board-delete").click();
+  });
+  await page.waitForTimeout(60);
+  const afterForget = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("axdraw:rooms")).map((room) => room.id),
+  );
+  check(
+    "forgetting a room drops only that room",
+    afterForget.length === 1 && afterForget[0] === "bbbb2222",
+    JSON.stringify(afterForget),
+  );
+  await closeModal();
+
+  await page.evaluate(() => localStorage.removeItem("axdraw:rooms"));
+  await resetView();
+
+  /* ---------------- joining a room ---------------- */
+
+  // Joining used to keep the board that was already open, and the first
+  // broadcast pushed it into the room — so in a class everyone's private
+  // notes piled onto the shared canvas. A room gets its own board.
+  await page.evaluate(() => {
+    const app = window.axdraw;
+    app.elements = [];
+    app.render();
+  });
+  await page.keyboard.press("2");
+  await page.mouse.move(300, 300);
+  await page.mouse.down();
+  await page.mouse.move(500, 500);
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+
+  const ownBoard = await page.evaluate(() => window.axdraw.currentBoardName());
+  const ownCount = await page.evaluate(() => window.axdraw.elements.filter((e) => !e.isDeleted).length);
+  check("the user has their own board with work on it", ownCount > 0, `${ownCount} on "${ownBoard}"`);
+
+  // A fragment-only change is a same-document navigation: without a
+  // hashchange listener, pasting a room link into an open tab does nothing
+  // and the user sits in their own canvas seeing no one.
+  await page.evaluate(() => {
+    location.hash = "#room=e2eroom000001,K3yBytesAAAAAAAAAAAAAA";
+  });
+  await page.waitForTimeout(1200);
+
+  const joined = await page.evaluate(() => ({
+    board: window.axdraw.currentBoardName(),
+    count: window.axdraw.elements.filter((e) => !e.isDeleted).length,
+  }));
+  check(
+    "pasting a room link into an open tab joins the room",
+    joined.board !== ownBoard,
+    `board is now "${joined.board}"`,
+  );
+  check(
+    "the room starts empty — own work is not pushed into it",
+    joined.count === 0,
+    `${joined.count} elements in the room`,
+  );
+
+  const backHome = await page.evaluate(async (name) => {
+    const app = window.axdraw;
+    app.openBoard(app.listBoards().find((b) => b.name === name).id);
+    return app.elements.filter((e) => !e.isDeleted).length;
+  }, ownBoard);
+  check("the user's own canvas survives the visit", backHome === ownCount, `${backHome} still there`);
+
+  // Rejoining must reuse the room's board, not spawn a new one each time.
+  const boardsBefore = await page.evaluate(() => window.axdraw.listBoards().length);
+  await page.evaluate(() => {
+    location.hash = "";
+  });
+  await page.waitForTimeout(200);
+  await page.evaluate(() => {
+    location.hash = "#room=e2eroom000001,K3yBytesAAAAAAAAAAAAAA";
+  });
+  await page.waitForTimeout(1200);
+  const boardsAfter = await page.evaluate(() => window.axdraw.listBoards().length);
+  check(
+    "rejoining the same room reuses its board",
+    boardsAfter === boardsBefore,
+    `${boardsBefore} -> ${boardsAfter} boards`,
+  );
+
+  await page.evaluate(() => {
+    location.hash = "";
+    localStorage.removeItem("axdraw:rooms");
+  });
+  await page.waitForTimeout(200);
   await resetView();
 
   /* ---------------- stuck modifiers ---------------- */

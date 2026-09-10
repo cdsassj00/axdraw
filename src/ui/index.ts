@@ -26,6 +26,7 @@ import { button, dismissable, h } from "./dom";
 import { iconEl } from "./icons";
 import { createCommandPalette } from "./commandPalette";
 import { createRecognitionChip } from "./recognitionChip";
+import { forgetRoom, listRecentRooms, roomUrl } from "../scene/recentRooms";
 
 interface ToolDefinition {
   tool: ToolType;
@@ -880,6 +881,7 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
       null,
       run(() => (app.collab ? app.stopCollab() : void app.startCollab())),
     ),
+    menuItem("users", "Recent rooms…", null, run(() => openRoomsDialog(app))),
     h("div", { class: "dropdown-separator" }),
     menuItem("grid", `Grid: ${app.state.gridEnabled ? "on" : "off"}`, "Ctrl+'", run(() => app.toggleGrid())),
     menuItem("selection", `Object snapping: ${app.state.snapEnabled ? "on" : "off"}`, null, run(() => {
@@ -1132,6 +1134,88 @@ function openBoardsDialog(app: App): void {
           },
         }),
       ]),
+      list,
+    ]),
+  );
+  document.body.appendChild(backdrop);
+}
+
+/**
+ * Recent rooms — the way back into a collaboration room.
+ *
+ * The relay stores nothing, so a room whose link is gone is unreachable.
+ * This list is local to the browser; it is a convenience, not a backup.
+ */
+function openRoomsDialog(app: App): void {
+  const backdrop = h("div", { class: "modal-backdrop" });
+  const close = (): void => backdrop.remove();
+  backdrop.addEventListener("pointerdown", (event) => {
+    if (event.target === backdrop) close();
+  });
+  window.addEventListener("keydown", function onKey(event) {
+    if (event.key === "Escape") {
+      close();
+      window.removeEventListener("keydown", onKey);
+    }
+  });
+
+  const list = h("div", { class: "board-list" });
+  const renderRows = (): void => {
+    const rooms = listRecentRooms();
+    if (!rooms.length) {
+      list.replaceChildren(h("p", { class: "rooms-empty", text: t("No rooms visited from this browser yet.") }));
+      return;
+    }
+    list.replaceChildren(
+      ...rooms.map((room) =>
+        h("div", { class: "board-row" }, [
+          h(
+            "button",
+            {
+              class: `board-open${app.collab?.id === room.id ? " is-current" : ""}`,
+              type: "button",
+              onclick: () => {
+                // Rejoining is a fragment change; the app joins on load.
+                location.href = roomUrl(room);
+                location.reload();
+              },
+            },
+            [
+              h("span", { class: "board-name", text: room.name || room.id.slice(0, 8) }),
+              h("span", { class: "board-date", text: new Date(room.visited).toLocaleString() }),
+            ],
+          ),
+          h("button", {
+            class: "secondary-btn board-rename",
+            type: "button",
+            text: t("Copy link"),
+            onclick: () => {
+              void navigator.clipboard.writeText(roomUrl(room));
+            },
+          }),
+          h("button", {
+            class: "secondary-btn board-delete",
+            type: "button",
+            text: t("Delete"),
+            title: t("Remove from this list — the room itself is unaffected"),
+            onclick: () => {
+              forgetRoom(room.id);
+              renderRows();
+            },
+          }),
+        ]),
+      ),
+    );
+  };
+  renderRows();
+
+  backdrop.append(
+    h("div", { class: "modal island", style: { width: "min(520px, 100%)" } }, [
+      h("div", { class: "modal-header" }, [h("h2", { text: t("Recent rooms") })]),
+      h("p", {
+        class: "rooms-note",
+        text: t("Rooms are relayed, not stored. This list lives in this browser only."),
+      }),
       list,
     ]),
   );

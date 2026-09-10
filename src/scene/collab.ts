@@ -20,6 +20,7 @@ import type { AxElement, BinaryFiles } from "../types";
 import { randomId } from "../utils/random";
 import { t } from "../i18n";
 import { decryptJson, encryptJson, fromBase64Url, generateKeyBytes, importAesKey, toBase64Url } from "./crypto";
+import { rememberRoom } from "./recentRooms";
 import { API_BASE } from "./share";
 
 export const ROOM_HASH_PATTERN = /^#room=([A-Za-z0-9]+),([A-Za-z0-9_-]+)$/;
@@ -55,6 +56,7 @@ export class CollabSession {
   private key: CryptoKey | null = null;
   private ws: WebSocket | null = null;
   private closed = false;
+  private everConnected = false;
   private cursors = new Map<string, RemoteCursor>();
   private cursorLayer: HTMLElement;
   private sceneTimer: number | null = null;
@@ -71,6 +73,11 @@ export class CollabSession {
     app.container.appendChild(this.cursorLayer);
   }
 
+  /** Room id, for labelling this room in the recent list. */
+  get id(): string {
+    return this.roomId;
+  }
+
   /** Creates a fresh room and connects to it. */
   static create(app: App): Promise<CollabSession> {
     return new CollabSession(app, randomId(), generateKeyBytes()).connect();
@@ -83,12 +90,22 @@ export class CollabSession {
 
   private async connect(): Promise<this> {
     this.key = await importAesKey(this.keyBytes);
-    await this.openSocket();
+    try {
+      await this.openSocket();
+    } catch (error) {
+      // The app never sees this object, so nothing else will tidy it up.
+      this.closed = true;
+      this.cursorLayer.remove();
+      throw error;
+    }
     const move = (event: PointerEvent) => this.sendCursor(event);
     this.app.container.addEventListener("pointermove", move);
     this.detachPointer = () => this.app.container.removeEventListener("pointermove", move);
     this.raf = requestAnimationFrame(this.renderCursors);
     history.replaceState(null, "", `${location.pathname}${location.search}#room=${this.roomId},${toBase64Url(this.keyBytes)}`);
+    // The relay stores nothing, so this list is the only way back into a room
+    // once its link leaves the address bar.
+    rememberRoom(this.roomId, toBase64Url(this.keyBytes), this.app.currentBoardName());
     return this;
   }
 
@@ -98,6 +115,7 @@ export class CollabSession {
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
         this.ws = ws;
+        this.everConnected = true;
         void this.send({ t: "hello", from: this.selfId });
         // A fresh peer should also offer what it has — with two blank
         // canvases this is a no-op; with content it seeds the room.
@@ -108,7 +126,13 @@ export class CollabSession {
       ws.onerror = () => reject(new Error("Could not reach the collaboration server"));
       ws.onclose = () => {
         this.ws = null;
-        if (!this.closed) setTimeout(() => void this.openSocket().catch(() => undefined), 2000);
+        // Reconnect only a session that was live: when the very first connect
+        // fails, connect() rejects and the app never takes ownership of this
+        // object, so retrying here would leave an unreachable session dialling
+        // the relay every two seconds for the life of the page.
+        if (!this.closed && this.everConnected) {
+          setTimeout(() => void this.openSocket().catch(() => undefined), 2000);
+        }
       };
     });
   }
