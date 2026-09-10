@@ -23,6 +23,7 @@ const CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
   "access-control-allow-headers": "content-type, x-ai-key",
+  "access-control-expose-headers": "x-room-store",
 };
 
 function randomId(length = 10) {
@@ -181,6 +182,17 @@ async function getRoomScene(env, id) {
     return object ? await object.arrayBuffer() : null;
   }
   return env.SCENES.get(`room:${id}`, { type: "arrayBuffer" });
+}
+
+/**
+ * Which store answered. R2 is read-after-write consistent, so a miss there
+ * means the room really is empty; KV is eventually consistent (measured at
+ * ~40s), so a miss may just be a scene that has not propagated yet. The
+ * client needs to tell those apart: writing over the second kind destroys
+ * work.
+ */
+function roomStoreName(env) {
+  return env.ROOM_SCENES ? "r2" : "kv";
 }
 
 export default {
@@ -426,12 +438,19 @@ export default {
         }
         if (request.method === "GET") {
           const body = await getRoomScene(env, id);
-          if (!body) return json({ error: "not found" }, 404);
+          const store = roomStoreName(env);
+          if (!body) {
+            return new Response(JSON.stringify({ error: "not found" }), {
+              status: 404,
+              headers: { "content-type": "application/json", "x-room-store": store, ...CORS_HEADERS },
+            });
+          }
           return new Response(body, {
             headers: {
               "content-type": "application/octet-stream",
               // Unlike a share, this changes as the room is drawn in.
               "cache-control": "no-store",
+              "x-room-store": store,
               ...CORS_HEADERS,
             },
           });

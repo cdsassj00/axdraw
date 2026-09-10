@@ -39,6 +39,8 @@ const CURSOR_THROTTLE_MS = 50;
 // carries everyone's merged work, so one artist's saves cover the room; a
 // save per participant per edit would multiply writes for no extra safety.
 const SAVE_THROTTLE_MS = 15000;
+// Backoff for a restore that reads a miss, covering KV's propagation delay.
+const RESTORE_RETRY_MS = [1500, 3000, 5000];
 
 type Message =
   | { t: "scene"; from: string; elements: AxElement[]; files: BinaryFiles }
@@ -71,6 +73,8 @@ export class CollabSession {
   private cursorLayer: HTMLElement;
   private sceneTimer: number | null = null;
   private saveTimer: number | null = null;
+  private restored = false;
+  private sawPeerScene = false;
   private lastCursorSent = 0;
   private sentFileIds = new Set<string>();
   private raf = 0;
@@ -109,19 +113,39 @@ export class CollabSession {
    */
   private async restoreSaved(): Promise<void> {
     if (!this.key) return;
-    try {
-      const response = await fetch(`${API_BASE}/api/rooms/${this.roomId}/scene`);
-      if (!response.ok) return; // 404 for a room nobody has saved yet.
-      const scene = await decryptJson<{ elements: AxElement[]; files: BinaryFiles }>(
-        this.key,
-        await response.arrayBuffer(),
-      );
-      if (Array.isArray(scene.elements) && scene.elements.length) {
-        this.app.applyRemoteScene(scene.elements, scene.files ?? {});
+    // A miss is ambiguous: the room may be new, or KV may not have caught up
+    // (measured at ~40s in production). Saving during that window would
+    // overwrite a real scene with an empty one, so retry before giving up —
+    // and until then, refuse to save. On R2 the first attempt always wins.
+    for (const wait of RESTORE_RETRY_MS) {
+      if (this.closed) return;
+      try {
+        const response = await fetch(`${API_BASE}/api/rooms/${this.roomId}/scene`);
+        if (response.ok) {
+          const scene = await decryptJson<{ elements: AxElement[]; files: BinaryFiles }>(
+            this.key,
+            await response.arrayBuffer(),
+          );
+          if (Array.isArray(scene.elements) && scene.elements.length) {
+            this.app.applyRemoteScene(scene.elements, scene.files ?? {});
+          }
+          this.restored = true;
+          return;
+        }
+        // A miss from a consistent store is the truth: the room is new, and
+        // waiting would only stop a first drawing from being saved.
+        if (response.headers.get("x-room-store") === "r2") {
+          this.restored = true;
+          return;
+        }
+      } catch {
+        // Offline or a wrong key: retrying costs nothing.
       }
-    } catch {
-      // A wrong key or an unreachable API: the room still works live.
+      // A peer's live scene is proof the room is reachable and current.
+      if (this.sawPeerScene) break;
+      await new Promise((resolve) => setTimeout(resolve, wait));
     }
+    this.restored = true;
   }
 
   /**
@@ -138,6 +162,8 @@ export class CollabSession {
 
   private async saveScene(unloading = false): Promise<void> {
     if (!this.key || this.closed) return;
+    // Never write before knowing what is already there — see restoreSaved().
+    if (!this.restored) return;
     try {
       const payload = await encryptJson(this.key, {
         elements: this.app.elements.filter((element) => !element.isDeleted),
@@ -286,6 +312,8 @@ export class CollabSession {
         // client's elements, so whoever is drawing writes it out with their
         // own next save. Saving on every peer frame would multiply writes by
         // the number of people in the room.
+        this.sawPeerScene = true;
+        this.restored = true; // A live peer is a better source than storage.
         this.app.applyRemoteScene(message.elements, message.files);
         break;
       case "cursor":
