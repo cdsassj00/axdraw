@@ -21,6 +21,12 @@ export interface RoomMeta {
   /** Board name at the time of the visit; a label, not an identifier. */
   name: string;
   visited: number;
+  /**
+   * The board this room's scene lives in. A room gets its own board so that
+   * joining never mixes the room with whatever the user was drawing before,
+   * and so that rejoining the same room returns to the same canvas.
+   */
+  boardId?: string;
 }
 
 function read(): RoomMeta[] {
@@ -52,8 +58,27 @@ export function listRecentRooms(): RoomMeta[] {
  * name rather than adding a duplicate.
  */
 export function rememberRoom(id: string, key: string, name: string): void {
+  const previous = read().find((room) => room.id === id);
   const rooms = read().filter((room) => room.id !== id);
-  rooms.unshift({ id, key, name, visited: Date.now() });
+  rooms.unshift({ id, key, name, visited: Date.now(), boardId: previous?.boardId });
+  write(rooms.slice(0, MAX_ROOMS));
+}
+
+/** The board a room's scene lives in, if this browser has been in it before. */
+export function roomBoardId(id: string): string | undefined {
+  return read().find((room) => room.id === id)?.boardId;
+}
+
+/** Ties a room to the board holding its scene. */
+export function setRoomBoard(id: string, key: string, boardId: string): void {
+  const rooms = read();
+  const room = rooms.find((entry) => entry.id === id);
+  if (room) {
+    room.boardId = boardId;
+    write(rooms);
+    return;
+  }
+  rooms.unshift({ id, key, name: "", visited: Date.now(), boardId });
   write(rooms.slice(0, MAX_ROOMS));
 }
 

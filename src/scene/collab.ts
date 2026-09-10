@@ -56,6 +56,7 @@ export class CollabSession {
   private key: CryptoKey | null = null;
   private ws: WebSocket | null = null;
   private closed = false;
+  private everConnected = false;
   private cursors = new Map<string, RemoteCursor>();
   private cursorLayer: HTMLElement;
   private sceneTimer: number | null = null;
@@ -89,7 +90,14 @@ export class CollabSession {
 
   private async connect(): Promise<this> {
     this.key = await importAesKey(this.keyBytes);
-    await this.openSocket();
+    try {
+      await this.openSocket();
+    } catch (error) {
+      // The app never sees this object, so nothing else will tidy it up.
+      this.closed = true;
+      this.cursorLayer.remove();
+      throw error;
+    }
     const move = (event: PointerEvent) => this.sendCursor(event);
     this.app.container.addEventListener("pointermove", move);
     this.detachPointer = () => this.app.container.removeEventListener("pointermove", move);
@@ -107,6 +115,7 @@ export class CollabSession {
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
         this.ws = ws;
+        this.everConnected = true;
         void this.send({ t: "hello", from: this.selfId });
         // A fresh peer should also offer what it has — with two blank
         // canvases this is a no-op; with content it seeds the room.
@@ -117,7 +126,13 @@ export class CollabSession {
       ws.onerror = () => reject(new Error("Could not reach the collaboration server"));
       ws.onclose = () => {
         this.ws = null;
-        if (!this.closed) setTimeout(() => void this.openSocket().catch(() => undefined), 2000);
+        // Reconnect only a session that was live: when the very first connect
+        // fails, connect() rejects and the app never takes ownership of this
+        // object, so retrying here would leave an unreachable session dialling
+        // the relay every two seconds for the life of the page.
+        if (!this.closed && this.everConnected) {
+          setTimeout(() => void this.openSocket().catch(() => undefined), 2000);
+        }
       };
     });
   }

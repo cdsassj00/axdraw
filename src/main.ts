@@ -13,5 +13,14 @@ createUI(app);
 void app.loadFromShareLink();
 void app.joinCollabFromHash();
 
+// Pasting a link into a tab that already has axdraw open only changes the
+// fragment, which is a same-document navigation: nothing reloads, so without
+// this the paste appears to do nothing at all and the user sits in their own
+// canvas wondering why they cannot see anyone.
+window.addEventListener("hashchange", () => {
+  void app.loadFromShareLink();
+  void app.joinCollabFromHash();
+});
+
 // Handy for debugging from the console.
 (window as unknown as { axdraw: App }).axdraw = app;

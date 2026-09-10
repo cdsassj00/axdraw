@@ -59,6 +59,10 @@ try {
     // built to degrade to fallback stacks, so those load failures are noise.
     const url = message.location()?.url ?? "";
     if (/fonts\.googleapis|fonts\.gstatic|cdn\.jsdelivr|googletagmanager/.test(url)) return;
+    // The join tests deliberately enter a room; `vite preview` serves the
+    // static build with no relay behind it, so the handshake for that one
+    // test room is expected to fail. Any other room id is a real error.
+    if (message.text().includes("/api/rooms/e2eroom000001/ws")) return;
     if (message.type() === "error") errors.push(message.text());
   });
 
@@ -1236,6 +1240,81 @@ try {
   await closeModal();
 
   await page.evaluate(() => localStorage.removeItem("axdraw:rooms"));
+  await resetView();
+
+  /* ---------------- joining a room ---------------- */
+
+  // Joining used to keep the board that was already open, and the first
+  // broadcast pushed it into the room — so in a class everyone's private
+  // notes piled onto the shared canvas. A room gets its own board.
+  await page.evaluate(() => {
+    const app = window.axdraw;
+    app.elements = [];
+    app.render();
+  });
+  await page.keyboard.press("2");
+  await page.mouse.move(300, 300);
+  await page.mouse.down();
+  await page.mouse.move(500, 500);
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+
+  const ownBoard = await page.evaluate(() => window.axdraw.currentBoardName());
+  const ownCount = await page.evaluate(() => window.axdraw.elements.filter((e) => !e.isDeleted).length);
+  check("the user has their own board with work on it", ownCount > 0, `${ownCount} on "${ownBoard}"`);
+
+  // A fragment-only change is a same-document navigation: without a
+  // hashchange listener, pasting a room link into an open tab does nothing
+  // and the user sits in their own canvas seeing no one.
+  await page.evaluate(() => {
+    location.hash = "#room=e2eroom000001,K3yBytesAAAAAAAAAAAAAA";
+  });
+  await page.waitForTimeout(1200);
+
+  const joined = await page.evaluate(() => ({
+    board: window.axdraw.currentBoardName(),
+    count: window.axdraw.elements.filter((e) => !e.isDeleted).length,
+  }));
+  check(
+    "pasting a room link into an open tab joins the room",
+    joined.board !== ownBoard,
+    `board is now "${joined.board}"`,
+  );
+  check(
+    "the room starts empty — own work is not pushed into it",
+    joined.count === 0,
+    `${joined.count} elements in the room`,
+  );
+
+  const backHome = await page.evaluate(async (name) => {
+    const app = window.axdraw;
+    app.openBoard(app.listBoards().find((b) => b.name === name).id);
+    return app.elements.filter((e) => !e.isDeleted).length;
+  }, ownBoard);
+  check("the user's own canvas survives the visit", backHome === ownCount, `${backHome} still there`);
+
+  // Rejoining must reuse the room's board, not spawn a new one each time.
+  const boardsBefore = await page.evaluate(() => window.axdraw.listBoards().length);
+  await page.evaluate(() => {
+    location.hash = "";
+  });
+  await page.waitForTimeout(200);
+  await page.evaluate(() => {
+    location.hash = "#room=e2eroom000001,K3yBytesAAAAAAAAAAAAAA";
+  });
+  await page.waitForTimeout(1200);
+  const boardsAfter = await page.evaluate(() => window.axdraw.listBoards().length);
+  check(
+    "rejoining the same room reuses its board",
+    boardsAfter === boardsBefore,
+    `${boardsBefore} -> ${boardsAfter} boards`,
+  );
+
+  await page.evaluate(() => {
+    location.hash = "";
+    localStorage.removeItem("axdraw:rooms");
+  });
+  await page.waitForTimeout(200);
   await resetView();
 
   /* ---------------- stuck modifiers ---------------- */
