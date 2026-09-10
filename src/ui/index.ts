@@ -1222,6 +1222,63 @@ function openRoomsDialog(app: App): void {
   document.body.appendChild(backdrop);
 }
 
+/**
+ * Move the selection onto another canvas — the way to break a canvas that has
+ * turned into a pile of unrelated work back into separate ones.
+ */
+function openMoveToBoardDialog(app: App): void {
+  const count = app.getSelectedElements().length;
+  if (!count) return;
+
+  const backdrop = h("div", { class: "modal-backdrop" });
+  const close = (): void => backdrop.remove();
+  backdrop.addEventListener("pointerdown", (event) => {
+    if (event.target === backdrop) close();
+  });
+  window.addEventListener("keydown", function onKey(event) {
+    if (event.key === "Escape") {
+      close();
+      window.removeEventListener("keydown", onKey);
+    }
+  });
+
+  const current = app.currentBoardId();
+  const others = app.listBoards().filter((board) => board.id !== current);
+
+  const list = h("div", { class: "board-list" }, [
+    h("button", {
+      class: "board-open",
+      type: "button",
+      onclick: () => {
+        app.moveSelectionToBoard(null);
+        close();
+      },
+    }, [h("span", { class: "board-name", text: t("+ A new canvas") })]),
+    ...others.map((board) =>
+      h("button", {
+        class: "board-open",
+        type: "button",
+        onclick: () => {
+          app.moveSelectionToBoard(board.id);
+          close();
+        },
+      }, [
+        h("span", { class: "board-name", text: board.name }),
+        h("span", { class: "board-date", text: new Date(board.updated).toLocaleString() }),
+      ]),
+    ),
+  ]);
+
+  backdrop.append(
+    h("div", { class: "modal island", style: { width: "min(480px, 100%)" } }, [
+      h("div", { class: "modal-header" }, [h("h2", { text: t("Move to canvas") })]),
+      h("p", { class: "rooms-note", text: `${count}${t(" elements will move. Undo brings them back.")}` }),
+      list,
+    ]),
+  );
+  document.body.appendChild(backdrop);
+}
+
 function openContextMenu(
   app: App,
   root: HTMLElement,
@@ -1261,6 +1318,7 @@ function openContextMenu(
       menuItem("duplicate", "Duplicate", "Ctrl+D", run(() => app.duplicate())),
       menuItem("copy", "Copy as PNG", null, run(() => void app.copyPngToClipboard())),
       menuItem("copy", "Copy as SVG", null, run(() => void app.copySvgToClipboard())),
+      menuItem("template", "Move to canvas…", null, run(() => openMoveToBoardDialog(app))),
       h("div", { class: "dropdown-separator" }),
       menuItem("bringToFront", "Bring to front", "Ctrl+Shift+]", run(() => app.changeZ("front"))),
       menuItem("bringForward", "Bring forward", "Ctrl+]", run(() => app.changeZ("forward"))),
