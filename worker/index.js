@@ -6,8 +6,10 @@
  * uploading and keeps the key in the URL fragment, so nothing readable ever
  * reaches this Worker or KV.
  *
- *   POST /api/scenes        body: iv‖ciphertext   → { "id": "…" }
- *   GET  /api/scenes/:id                          → the same bytes
+ *   POST /api/scenes             body: iv‖ciphertext   → { "id": "…" }
+ *   GET  /api/scenes/:id                               → the same bytes
+ *   PUT  /api/rooms/:id/scene    body: iv‖ciphertext   → { "ok": true }
+ *   GET  /api/rooms/:id/scene                          → the same bytes
  *
  * CORS is open on purpose: ids are unguessable (60 bits) and the content is
  * ciphertext, so the origin of the reader adds no protection worth having,
@@ -19,7 +21,7 @@ const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456
 
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
   "access-control-allow-headers": "content-type, x-ai-key",
 };
 
@@ -145,6 +147,40 @@ async function resolveAiProvider(request, env, modelEnv, preferences) {
     };
   }
   return null;
+}
+
+/**
+ * Where a room's scene is kept.
+ *
+ * R2 when it is bound, KV otherwise. The payload is an opaque encrypted blob
+ * that is rewritten every few seconds while a room is in use, which is object
+ * storage's job, not a database's — there is nothing to query inside
+ * ciphertext, so a JSON column would buy nothing and cost the size limit. KV
+ * works but allows only one write per second per key and 1,000 writes a day
+ * on the free plan, which a single busy classroom exhausts; R2 has room to
+ * spare. The fallback keeps deploys working before the bucket exists.
+ *
+ * Enable R2 with:
+ *   npx wrangler r2 bucket create axdraw-rooms
+ * then add to wrangler.toml:
+ *   [[r2_buckets]]
+ *   binding = "ROOM_SCENES"
+ *   bucket_name = "axdraw-rooms"
+ */
+async function putRoomScene(env, id, body) {
+  if (env.ROOM_SCENES) {
+    await env.ROOM_SCENES.put(`room/${id}`, body);
+    return;
+  }
+  await env.SCENES.put(`room:${id}`, body);
+}
+
+async function getRoomScene(env, id) {
+  if (env.ROOM_SCENES) {
+    const object = await env.ROOM_SCENES.get(`room/${id}`);
+    return object ? await object.arrayBuffer() : null;
+  }
+  return env.SCENES.get(`room:${id}`, { type: "arrayBuffer" });
 }
 
 export default {
@@ -368,6 +404,38 @@ export default {
       const room = /^\/api\/rooms\/([A-Za-z0-9]+)\/ws$/.exec(url.pathname);
       if (room) {
         return env.ROOMS.get(env.ROOMS.idFromName(room[1])).fetch(request);
+      }
+
+      // A room's saved scene. The relay itself keeps nothing, so without this
+      // a room's work vanishes the moment the last person closes the tab —
+      // and pairing every room with a separate share link means two links per
+      // canvas, the second frozen at the moment it was made. The body is the
+      // same opaque ciphertext as a share: the key lives in the room link's
+      // fragment and never reaches the Worker.
+      const roomScene = /^\/api\/rooms\/([A-Za-z0-9]+)\/scene$/.exec(url.pathname);
+      if (roomScene) {
+        const id = roomScene[1];
+        if (request.method === "PUT") {
+          const length = Number(request.headers.get("content-length") ?? 0);
+          if (length > MAX_BYTES) return json({ error: "too large" }, 413);
+          const body = await request.arrayBuffer();
+          if (body.byteLength === 0) return json({ error: "empty body" }, 400);
+          if (body.byteLength > MAX_BYTES) return json({ error: "too large" }, 413);
+          await putRoomScene(env, id, body);
+          return json({ ok: true });
+        }
+        if (request.method === "GET") {
+          const body = await getRoomScene(env, id);
+          if (!body) return json({ error: "not found" }, 404);
+          return new Response(body, {
+            headers: {
+              "content-type": "application/octet-stream",
+              // Unlike a share, this changes as the room is drawn in.
+              "cache-control": "no-store",
+              ...CORS_HEADERS,
+            },
+          });
+        }
       }
 
       if (url.pathname === "/api/scenes" && request.method === "POST") {
