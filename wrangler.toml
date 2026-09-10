@@ -28,3 +28,12 @@ class_name = "Room"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Room"]
+
+# Room scenes. R2 rather than KV: KV is eventually consistent (measured at
+# ~40s in production), and a room read back inside that window looks empty —
+# draw once and the save overwrites the real scene. R2 is read-after-write
+# consistent, so that window does not exist. The Worker falls back to KV when
+# this binding is absent, so removing it degrades rather than breaks.
+[[r2_buckets]]
+binding = "ROOM_SCENES"
+bucket_name = "axdraw-rooms"
