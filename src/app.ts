@@ -137,6 +137,7 @@ import {
 } from "./scene/storage";
 import { createShareLink, loadSharedScene } from "./scene/share";
 import { CollabSession, ROOM_HASH_PATTERN } from "./scene/collab";
+import { renameRecentRoom } from "./scene/recentRooms";
 import { t } from "./i18n";
 import type {
   AppState,
@@ -2846,6 +2847,9 @@ export class App {
     if (!trimmed) return;
     if (trimmed === listBoards().find((board) => board.id === id)?.name) return;
     renameBoard(id, trimmed);
+    // The recent-rooms list labels rooms by the board name they were seen
+    // under, so a rename while connected should follow.
+    if (this.collab) renameRecentRoom(this.collab.id, trimmed);
     this.notify();
   }
 

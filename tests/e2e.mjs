@@ -1158,6 +1158,86 @@ try {
 
   await resetView();
 
+  /* ---------------- recent rooms ---------------- */
+
+  // A room is a relay: nothing about it is stored server-side, and the key
+  // lives only in the URL fragment. Lose the link and the room is gone, so
+  // the local list is the only way back — it has to actually round-trip.
+  const openRooms = async () => {
+    await openMenu();
+    await page.evaluate(() => {
+      [...document.querySelectorAll(".dropdown-item")]
+        .find((node) => node.textContent.trim().startsWith("Recent rooms"))
+        ?.click();
+    });
+    await page.waitForTimeout(90);
+  };
+  const closeModal = () =>
+    page.evaluate(() => document.querySelector(".modal-backdrop")?.remove());
+
+  await page.evaluate(() => localStorage.removeItem("axdraw:rooms"));
+  await openRooms();
+  check("an untouched browser lists no rooms", await page.evaluate(() => !!document.querySelector(".rooms-empty")));
+  await closeModal();
+
+  // Seed through localStorage, the same shape the collab session writes.
+  await page.evaluate(() => {
+    const now = Date.now();
+    localStorage.setItem(
+      "axdraw:rooms",
+      JSON.stringify([
+        { id: "bbbb2222", key: "K3yBytesBBB", name: "두 번째 방", visited: now - 5000 },
+        { id: "aaaa1111", key: "K3yBytesAAA", name: "첫 번째 방", visited: now },
+      ]),
+    );
+  });
+
+  await openRooms();
+  const roomRows = await page.evaluate(() =>
+    [...document.querySelectorAll(".modal .board-name")].map((el) => el.textContent),
+  );
+  check(
+    "the dialog lists remembered rooms, newest first",
+    roomRows.length === 2 && roomRows[0] === "첫 번째 방",
+    JSON.stringify(roomRows),
+  );
+
+  // The rebuilt link has to carry the key: a room id alone opens nothing.
+  const link = await page.evaluate(async () => {
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: (text) => ((copied = text), Promise.resolve()) },
+    });
+    const rows = [...document.querySelectorAll(".modal .board-row")];
+    rows[0].querySelector(".board-rename").click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    return copied;
+  });
+  check(
+    "copying a room rebuilds a full link, key included",
+    link.endsWith("#room=aaaa1111,K3yBytesAAA"),
+    link.slice(link.indexOf("#")) || "(nothing copied)",
+  );
+
+  await page.evaluate(() => {
+    const rows = [...document.querySelectorAll(".modal .board-row")];
+    rows[0].querySelector(".board-delete").click();
+  });
+  await page.waitForTimeout(60);
+  const afterForget = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("axdraw:rooms")).map((room) => room.id),
+  );
+  check(
+    "forgetting a room drops only that room",
+    afterForget.length === 1 && afterForget[0] === "bbbb2222",
+    JSON.stringify(afterForget),
+  );
+  await closeModal();
+
+  await page.evaluate(() => localStorage.removeItem("axdraw:rooms"));
+  await resetView();
+
   /* ---------------- stuck modifiers ---------------- */
 
   // Modifiers are tracked from key events, so a key released while the page is
