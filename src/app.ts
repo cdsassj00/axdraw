@@ -2832,6 +2832,28 @@ export class App {
     this.notify();
   }
 
+  /**
+   * Frames the island holding the most work, without selecting it.
+   *
+   * What a newcomer to a room needs: the shared canvas is infinite, and they
+   * arrive at whatever viewport their own browser last had, which is almost
+   * never where the drawing is. `zoomToFit` is the wrong tool here — on a
+   * board with scattered islands it frames the empty space between them.
+   * Selecting, as the finder does, would also be wrong: a guest should not
+   * arrive with several hundred of someone else's elements selected and one
+   * keystroke away from moving them.
+   *
+   * Returns false when there is nothing worth framing.
+   */
+  frameBusiestCluster(): boolean {
+    const clusters = this.listClusters();
+    if (!clusters.length) return false;
+    this.fitEveryone = true; // Arriving in someone else's room, not my own.
+    this.zoomToBounds(clusters[0].bounds);
+    this.notify();
+    return true;
+  }
+
   zoomToSelection(): void {
     this.fitEveryone = false;
     const selected = this.measurable(this.getSelectedElements());

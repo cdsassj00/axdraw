@@ -74,13 +74,21 @@ export class CollabSession {
   private sceneTimer: number | null = null;
   private saveTimer: number | null = null;
   private restored = false;
+  private framePending = false;
+  private detachFrameCancel: (() => void) | null = null;
   private sawPeerScene = false;
   private lastCursorSent = 0;
   private sentFileIds = new Set<string>();
   private raf = 0;
   private detachPointer: (() => void) | null = null;
 
-  private constructor(app: App, private roomId: string, private keyBytes: Uint8Array<ArrayBuffer>) {
+  private constructor(
+    app: App,
+    private roomId: string,
+    private keyBytes: Uint8Array<ArrayBuffer>,
+    /** Joined someone else's link, rather than opened a room of my own. */
+    private readonly guest = false,
+  ) {
     this.app = app;
     this.url = `${location.origin}${location.pathname}#room=${roomId},${toBase64Url(keyBytes)}`;
     this.cursorLayer = document.createElement("div");
@@ -100,7 +108,7 @@ export class CollabSession {
 
   /** Joins the room named in an existing link's fragment pieces. */
   static join(app: App, roomId: string, keyText: string): Promise<CollabSession> {
-    return new CollabSession(app, roomId, fromBase64Url(keyText)).connect();
+    return new CollabSession(app, roomId, fromBase64Url(keyText), true).connect();
   }
 
   /**
@@ -128,6 +136,7 @@ export class CollabSession {
           );
           if (Array.isArray(scene.elements) && scene.elements.length) {
             this.app.applyRemoteScene(scene.elements, scene.files ?? {});
+            this.frameOnArrival();
           }
           this.restored = true;
           return;
@@ -147,6 +156,31 @@ export class CollabSession {
     }
     this.restored = true;
   }
+
+  /**
+   * Takes a newcomer to the work.
+   *
+   * A guest opens the link and lands on their own last viewport, which on an
+   * infinite canvas is almost never where the drawing is — the room looks
+   * empty and they have to hunt for it. The first scene to arrive, from
+   * storage or from a peer, is the cue to frame the busiest island.
+   *
+   * Only once, and only until the guest touches anything: someone who has
+   * already started panning has chosen their own view, and yanking the
+   * canvas out from under them would be worse than the blank screen.
+   */
+  private frameOnArrival(): void {
+    if (!this.framePending) return;
+    this.framePending = false;
+    this.cancelFraming();
+    this.app.frameBusiestCluster();
+  }
+
+  private cancelFraming = (): void => {
+    this.framePending = false;
+    this.detachFrameCancel?.();
+    this.detachFrameCancel = null;
+  };
 
   /**
    * Saves the room. Throttled well clear of KV's one-write-per-second per
@@ -223,6 +257,18 @@ export class CollabSession {
     // The relay stores nothing, so this list is the only way back into a room
     // once its link leaves the address bar.
     rememberRoom(this.roomId, toBase64Url(this.keyBytes), this.app.currentBoardName());
+    if (this.guest) {
+      this.framePending = true;
+      const target = this.app.container;
+      target.addEventListener("pointerdown", this.cancelFraming);
+      target.addEventListener("wheel", this.cancelFraming, { passive: true });
+      window.addEventListener("keydown", this.cancelFraming);
+      this.detachFrameCancel = () => {
+        target.removeEventListener("pointerdown", this.cancelFraming);
+        target.removeEventListener("wheel", this.cancelFraming);
+        window.removeEventListener("keydown", this.cancelFraming);
+      };
+    }
     void this.restoreSaved();
     window.addEventListener("pagehide", this.onPageHide);
     document.addEventListener("visibilitychange", this.onVisibility);
@@ -315,6 +361,7 @@ export class CollabSession {
         this.sawPeerScene = true;
         this.restored = true; // A live peer is a better source than storage.
         this.app.applyRemoteScene(message.elements, message.files);
+        if (message.elements.length) this.frameOnArrival();
         break;
       case "cursor":
         this.updateCursor(message.from, message.x, message.y);
@@ -373,6 +420,7 @@ export class CollabSession {
     // Flush before closing: the throttle window is several seconds, and
     // leaving is exactly when the last edits must not be lost.
     this.flushSave();
+    this.cancelFraming();
     window.removeEventListener("pagehide", this.onPageHide);
     document.removeEventListener("visibilitychange", this.onVisibility);
     this.closed = true;
