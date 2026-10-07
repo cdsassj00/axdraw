@@ -365,9 +365,14 @@ try {
   await lPage.evaluate(() => window.axdraw.newBoard());
   await rect(lPage, [500, 400], [620, 480]);
   await lPage.waitForTimeout(3500);
-  const stored = LIVE
-    ? (await cloudApi(lPage, "/api/cloud/canvases")).body.canvases
-    : sql("SELECT id, name, size FROM canvases");
+  const listStored = async () =>
+    LIVE ? (await cloudApi(lPage, "/api/cloud/canvases")).body.canvases : sql("SELECT id, name, size FROM canvases");
+  let stored = await listStored();
+  // Saves trail edits by a couple of seconds, more against a real deployment.
+  for (let deadline = Date.now() + 15000; stored.length < 2 && Date.now() < deadline; ) {
+    await lPage.waitForTimeout(1000);
+    stored = await listStored();
+  }
   check("every canvas is saved to the cloud", stored.length === 2, `${stored.length} canvases`);
   check("canvas names reach the server encrypted", stored.every((row) => !/캔버스/.test(row.name)), stored.map((r) => r.name.slice(0, 12)).join(","));
 
@@ -390,15 +395,25 @@ try {
   await rect(tabPage, [300, 550], [380, 620]);
   await tabPage.waitForTimeout(3500);
   await rect(lPage, [700, 550], [780, 620]);
-  await lPage.waitForTimeout(4500);
-  await tabPage.evaluate(() => {
-    const app = window.axdraw;
-    const here = app.currentBoardId();
-    const other = app.listBoards().find((b) => b.id !== here).id;
-    app.openBoard(other);
-    app.openBoard(here);
-  });
-  await tabPage.waitForTimeout(2500);
+  // The laptop's save meets the tablet's, merges, and saves again: a few
+  // round trips, slower against a real deployment than a local Worker. The
+  // tablet sees it the next time it opens the canvas, so reopen until it
+  // does — bounded, so a merge that never lands still fails.
+  const reopenUntil = async (want, deadline = Date.now() + 20000) => {
+    for (;;) {
+      await tabPage.waitForTimeout(2000);
+      await tabPage.evaluate(() => {
+        const app = window.axdraw;
+        const here = app.currentBoardId();
+        const other = app.listBoards().find((b) => b.id !== here).id;
+        app.openBoard(other);
+        app.openBoard(here);
+      });
+      await tabPage.waitForTimeout(1500);
+      if ((await live(tabPage)).length === want || Date.now() > deadline) return;
+    }
+  };
+  await reopenUntil(3);
   const laptopView = (await live(lPage)).length;
   const tabletView = (await live(tabPage)).length;
   check(
