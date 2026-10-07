@@ -22,7 +22,11 @@ import { chromium } from "playwright";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const PORT = Number(process.env.PORT ?? 8797);
-const BASE = `http://localhost:${PORT}`;
+// BASE_URL runs everything against a deployed site instead of wrangler dev.
+// Cloud checks that need the database then only confirm the app copes with
+// cloud storage not being switched on, unless CLOUD=1 says it is.
+const LIVE = process.env.BASE_URL ?? null;
+const BASE = LIVE ?? `http://localhost:${PORT}`;
 const WRANGLER = (process.env.WRANGLER ?? "npx --yes wrangler@4").split(" ");
 
 let passed = 0;
@@ -64,11 +68,13 @@ database_id = "00000000-0000-0000-0000-000000000000"
 );
 const state = join(work, "state");
 
-const server = spawn(
-  WRANGLER[0],
-  [...WRANGLER.slice(1), "dev", "-c", config, "--port", String(PORT), "--persist-to", state],
-  { cwd: work, stdio: "ignore", detached: true },
-);
+const server = LIVE
+  ? null
+  : spawn(
+      WRANGLER[0],
+      [...WRANGLER.slice(1), "dev", "-c", config, "--port", String(PORT), "--persist-to", state],
+      { cwd: work, stdio: "ignore", detached: true },
+    );
 
 /** Runs SQL against the local D1 the Worker is using. */
 function sql(command) {
@@ -98,7 +104,9 @@ try {
   await waitForServer();
   browser = await chromium.launch({
     ...(process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {}),
-    args: ["--no-sandbox"],
+    ...(LIVE && process.env.HTTPS_PROXY ? { proxy: { server: process.env.HTTPS_PROXY } } : {}),
+    // CHROMIUM_ARGS: extra flags, e.g. trusting a proxy's CA by its key.
+    args: ["--no-sandbox", ...(process.env.CHROMIUM_ARGS ?? "").split(" ").filter(Boolean)],
   });
 
   const errors = [];
@@ -189,6 +197,10 @@ try {
 
   /* -------------------------------------------------- live rooms -- */
 
+  // SKIP_ROOMS: for networks that cannot carry WebSockets (some egress proxies).
+  if (process.env.SKIP_ROOMS) console.log("  --  live rooms skipped (SKIP_ROOMS)");
+  else {
+
   await tPage.click(".share-btn");
   await tPage.click(".share-live-start");
   await tPage.waitForFunction(() => window.__copied.some((text) => text.includes("#room=")));
@@ -273,7 +285,30 @@ try {
     (await sPage.evaluate(() => window.axdraw.collab?.url)) === otherRoom,
   );
 
+  }
+
   /* -------------------------------------------------- cloud -- */
+
+  if (LIVE && process.env.CLOUD !== "1") {
+    const visitor = await profile("visitor");
+    const vPage = await visitor.open();
+    await rect(vPage, [300, 300], [420, 380]);
+    check("the cloud chip offers cloud saving", (await vPage.getAttribute(".cloud-chip", "data-state")) === "off");
+    await vPage.click(".cloud-chip");
+    await vPage.fill(".cloud-email", "e2e-check@example.com");
+    await vPage.check(".consent-privacy");
+    await vPage.click(".cloud-submit");
+    await vPage.waitForFunction(() => (document.querySelector(".cloud-error")?.textContent ?? "").length > 0, null, { timeout: 15000 });
+    check(
+      "before the database exists, signing up says so plainly",
+      /not switched on/.test((await vPage.textContent(".cloud-error")) ?? ""),
+      await vPage.textContent(".cloud-error"),
+    );
+    check("and leaves nothing half-registered", await vPage.evaluate(() => !localStorage.getItem("axdraw:cloud")));
+    check("the drawing is untouched", (await live(vPage)).length === 1);
+    check("no page errors", errors.length === 0, errors.join(" | "));
+    throw "done";
+  }
 
   const laptop = await profile("laptop");
   const lPage = await laptop.open();
@@ -362,12 +397,14 @@ try {
 
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (error) {
-  failed++;
-  console.error(error);
+  if (error !== "done") {
+    failed++;
+    console.error(error);
+  }
 } finally {
   await browser?.close();
   try {
-    process.kill(-server.pid);
+    if (server) process.kill(-server.pid);
   } catch {
     // Already gone.
   }

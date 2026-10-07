@@ -11,7 +11,8 @@ import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 
 const PORT = Number(process.env.PORT ?? 4173);
-const BASE = `http://localhost:${PORT}`;
+// BASE_URL runs the suite against a deployed site instead of a local preview.
+const BASE = process.env.BASE_URL ?? `http://localhost:${PORT}`;
 const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR ?? null;
 
 let passed = 0;
@@ -37,10 +38,12 @@ async function waitForServer(url, timeoutMs = 30000) {
   throw new Error(`Preview server did not start on ${url}`);
 }
 
-const server = spawn("npx", ["vite", "preview", "--port", String(PORT)], {
-  stdio: "ignore",
-  detached: true,
-});
+const server = process.env.BASE_URL
+  ? null
+  : spawn("npx", ["vite", "preview", "--port", String(PORT)], {
+      stdio: "ignore",
+      detached: true,
+    });
 
 let browser;
 try {
@@ -48,7 +51,10 @@ try {
 
   browser = await chromium.launch({
     ...(process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {}),
-    args: ["--no-sandbox"],
+    // A deployed site may only be reachable through the environment's proxy.
+    ...(process.env.BASE_URL && process.env.HTTPS_PROXY ? { proxy: { server: process.env.HTTPS_PROXY } } : {}),
+    // CHROMIUM_ARGS: extra flags, e.g. trusting a proxy's CA by its key.
+    args: ["--no-sandbox", ...(process.env.CHROMIUM_ARGS ?? "").split(" ").filter(Boolean)],
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
 
@@ -1723,7 +1729,7 @@ try {
 } finally {
   await browser?.close();
   try {
-    process.kill(-server.pid);
+    if (server) process.kill(-server.pid);
   } catch {
     // Already gone.
   }

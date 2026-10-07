@@ -211,6 +211,15 @@ Workers 무료 플랜(일 10만 요청, KV 1GB, R2 10GB, D1 5GB, Durable Objects
 
 **통합 테스트**: `npm run build && node tests/integration.mjs` — 실제 `worker/index.js`를 `wrangler dev`(로컬 Durable Object·R2·KV·D1, 매번 새 상태)로 띄우고, 교사·학생·두 번째 기기 등 여러 브라우저 프로필로 공유 링크, 실시간 방, 클라우드 저장을 끝까지 검증합니다. `vite preview`로 도는 `tests/e2e.mjs`는 서버가 없어서 이 부분을 볼 수 없었습니다.
 
+**배포된 사이트 검증**: 두 테스트 모두 `BASE_URL`을 주면 로컬 서버 대신 실제 사이트를 대상으로 돕니다(배포 직후 확인용).
+
+```bash
+BASE_URL=https://axdraw.org node tests/e2e.mjs
+BASE_URL=https://axdraw.org node tests/integration.mjs   # D1 설정 후에는 CLOUD=1
+```
+
+WebSocket을 통과시키지 않는 네트워크(일부 회사·샌드박스 프록시)에서는 `SKIP_ROOMS=1`로 실시간 방 검사를 건너뜁니다.
+
 GitHub Pages 같은 정적 호스팅에 앱을 두고 공유 API만 Worker를 쓰려면 빌드할 때 주소를 지정합니다:
 
 ```bash
