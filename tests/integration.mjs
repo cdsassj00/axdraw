@@ -310,12 +310,31 @@ try {
     throw "done";
   }
 
+  // What the server holds, read back through the API with the browser's own
+  // credentials — works against a deployed site, where the database cannot
+  // be queried directly.
+  const cloudApi = (page, path, account) =>
+    page.evaluate(
+      async ({ path, account }) => {
+        const acct = account ?? JSON.parse(localStorage.getItem("axdraw:cloud"));
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`axdraw-cloud-auth:${acct.secret}`));
+        let binary = "";
+        for (const byte of new Uint8Array(digest)) binary += String.fromCharCode(byte);
+        const token = btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+        const response = await fetch(path, { headers: { authorization: `Bearer ${acct.workspace}.${token}` } });
+        return { status: response.status, body: await response.json().catch(() => null), account: acct };
+      },
+      { path, account },
+    );
+  // A throwaway address on a live site; the run deletes it again at the end.
+  const testEmail = LIVE ? `e2e-check+${Date.now()}@example.com` : "teacher@example.com";
+
   const laptop = await profile("laptop");
   const lPage = await laptop.open();
   await rect(lPage, [300, 300], [420, 380]);
   check("the cloud chip starts in 'only in this browser'", (await lPage.getAttribute(".cloud-chip", "data-state")) === "off");
   await lPage.click(".cloud-chip");
-  await lPage.fill(".cloud-email", "Teacher@Example.com");
+  await lPage.fill(".cloud-email", LIVE ? testEmail : "Teacher@Example.com");
   await lPage.click(".cloud-submit");
   check(
     "the required consent cannot be skipped",
@@ -327,17 +346,28 @@ try {
   await lPage.click(".cloud-submit");
   await lPage.waitForFunction(() => document.querySelector(".cloud-chip")?.dataset.state === "saved", null, { timeout: 15000 });
   check("signing up switches cloud saving on", true);
-  let lead = sql("SELECT email, marketing_consent, consent_version FROM leads");
-  check(
-    "the email and both consents are recorded",
-    lead.length === 1 && lead[0].email === "teacher@example.com" && lead[0].marketing_consent === 1,
-    JSON.stringify(lead),
-  );
+  if (LIVE) {
+    const account = await cloudApi(lPage, "/api/cloud/account");
+    check(
+      "the email and both consents are recorded",
+      account.status === 200 && account.body.email === testEmail && account.body.marketing === true,
+      JSON.stringify(account.body),
+    );
+  } else {
+    const lead = sql("SELECT email, marketing_consent, consent_version FROM leads");
+    check(
+      "the email and both consents are recorded",
+      lead.length === 1 && lead[0].email === "teacher@example.com" && lead[0].marketing_consent === 1,
+      JSON.stringify(lead),
+    );
+  }
 
   await lPage.evaluate(() => window.axdraw.newBoard());
   await rect(lPage, [500, 400], [620, 480]);
   await lPage.waitForTimeout(3500);
-  const stored = sql("SELECT id, name, size FROM canvases");
+  const stored = LIVE
+    ? (await cloudApi(lPage, "/api/cloud/canvases")).body.canvases
+    : sql("SELECT id, name, size FROM canvases");
   check("every canvas is saved to the cloud", stored.length === 2, `${stored.length} canvases`);
   check("canvas names reach the server encrypted", stored.every((row) => !/캔버스/.test(row.name)), stored.map((r) => r.name.slice(0, 12)).join(","));
 
@@ -381,18 +411,30 @@ try {
   await lPage.waitForFunction(() => !document.querySelector(".consent-marketing")?.disabled);
   await lPage.uncheck(".consent-marketing");
   await lPage.waitForTimeout(800);
-  lead = sql("SELECT marketing_consent FROM leads");
-  check("the newsletter consent can be withdrawn", lead[0]?.marketing_consent === 0, JSON.stringify(lead));
+  if (LIVE) {
+    const account = await cloudApi(lPage, "/api/cloud/account");
+    check("the newsletter consent can be withdrawn", account.body?.marketing === false, JSON.stringify(account.body));
+  } else {
+    const lead = sql("SELECT marketing_consent FROM leads");
+    check("the newsletter consent can be withdrawn", lead[0]?.marketing_consent === 0, JSON.stringify(lead));
+  }
+  const credentials = (await cloudApi(lPage, "/api/cloud/canvases")).account;
 
   lPage.once("dialog", (dialog) => void dialog.accept());
   await lPage.click(".danger-btn");
   await lPage.waitForTimeout(1500);
-  const left = sql("SELECT (SELECT count(*) FROM leads) AS leads, (SELECT count(*) FROM workspaces) AS workspaces, (SELECT count(*) FROM canvases) AS canvases");
-  check(
-    "deleting cloud data removes the email and every canvas",
-    left[0].leads === 0 && left[0].workspaces === 0 && left[0].canvases === 0,
-    JSON.stringify(left[0]),
-  );
+  if (LIVE) {
+    // The account is gone, so its old credentials no longer open anything.
+    const after = await cloudApi(lPage, "/api/cloud/canvases", credentials);
+    check("deleting cloud data removes the email and every canvas", after.status === 401, `status ${after.status}`);
+  } else {
+    const left = sql("SELECT (SELECT count(*) FROM leads) AS leads, (SELECT count(*) FROM workspaces) AS workspaces, (SELECT count(*) FROM canvases) AS canvases");
+    check(
+      "deleting cloud data removes the email and every canvas",
+      left[0].leads === 0 && left[0].workspaces === 0 && left[0].canvases === 0,
+      JSON.stringify(left[0]),
+    );
+  }
   check("and this browser keeps its own copies", (await boards(lPage)).length >= 2);
 
   check("no page errors", errors.length === 0, errors.join(" | "));
