@@ -157,14 +157,82 @@ try {
   });
   check("an arrow binds to the shapes at both ends", binding.start && binding.end, JSON.stringify(binding));
 
+  const arrowEnds = () =>
+    page.evaluate(() => {
+      const arrow = window.axdraw.elements.find((element) => element.type === "arrow");
+      const last = arrow.points[arrow.points.length - 1];
+      return {
+        start: [Math.round(arrow.x), Math.round(arrow.y)],
+        end: [Math.round(arrow.x + last[0]), Math.round(arrow.y + last[1])],
+      };
+    });
+  const ellipseTop = () =>
+    page.evaluate(() => Math.round(window.axdraw.elements.find((element) => element.type === "ellipse").y));
+
+  // Binding used to aim each end at the shape's centre, so the arrow tilted
+  // the moment it attached unless both centres were exactly level — and
+  // again on every nudge. Select the ellipse by its top edge, then drag it by
+  // a point on its outline that is not a resize handle.
   await page.keyboard.press("v");
   await page.mouse.click(770, 300);
-  await drag([770, 300], [770, 200]);
-  const tipY = await page.evaluate(() => {
-    const arrow = window.axdraw.elements.find((element) => element.type === "arrow");
-    return Math.round(arrow.y + arrow.points[arrow.points.length - 1][1]);
-  });
-  check("a bound arrow follows the shape it points at", tipY < 340, `tip y = ${tipY}`);
+  await drag([819, 385], [819, 415]);
+  const nudged = await arrowEnds();
+  check(
+    "a bound arrow stays straight when its shape moves a little",
+    (await ellipseTop()) === 330 && nudged.start[1] === nudged.end[1],
+    JSON.stringify(nudged),
+  );
+
+  await drag([819, 415], [819, 715]);
+  const followed = await arrowEnds();
+  check(
+    "a bound arrow follows the shape once no straight line reaches it",
+    (await ellipseTop()) === 630 && followed.end[1] > 560,
+    JSON.stringify(followed),
+  );
+
+  /* ---------------- straight arrows ---------------- */
+
+  const lastArrowAngle = () =>
+    page.evaluate(() => {
+      const arrow = window.axdraw.elements.filter((element) => element.type === "arrow" && !element.isDeleted).pop();
+      const [sx, sy] = arrow.points[0];
+      const [ex, ey] = arrow.points[arrow.points.length - 1];
+      return {
+        angle: Number(((Math.atan2(ey - sy, ex - sx) * 180) / Math.PI).toFixed(1)),
+        bound: Boolean(arrow.startBinding && arrow.endBinding),
+      };
+    });
+
+  // Two boxes whose centres sit 20px apart vertically: the exact layout that
+  // turned a perfectly level arrow into a 3.4° diagonal on release.
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([300, 300], [420, 380]);
+  await page.keyboard.press("r");
+  await drag([600, 280], [760, 440]);
+  await page.keyboard.press("a");
+  await drag([425, 320], [595, 320]);
+  const level = await lastArrowAngle();
+  check("a level arrow between offset boxes stays level once bound", level.bound && level.angle === 0, JSON.stringify(level));
+
+  await page.keyboard.press("a");
+  await drag([425, 360], [595, 382]);
+  const wobble = await lastArrowAngle();
+  check("a hand wobble of ~7° still comes out level", wobble.angle === 0, JSON.stringify(wobble));
+
+  await resetView();
+  await page.keyboard.press("a");
+  await drag([300, 300], [600, 520]);
+  const diagonal = await lastArrowAngle();
+  check("a deliberate diagonal stays diagonal", Math.abs(diagonal.angle - 36.3) < 1, JSON.stringify(diagonal));
+
+  await page.keyboard.press("a");
+  await page.keyboard.down("Alt");
+  await drag([300, 600], [600, 630]);
+  await page.keyboard.up("Alt");
+  const shallow = await lastArrowAngle();
+  check("Alt keeps a shallow slope that would otherwise snap", Math.abs(shallow.angle - 5.7) < 1, JSON.stringify(shallow));
 
   /* ---------------- text ---------------- */
 
@@ -1396,6 +1464,70 @@ try {
     localStorage.removeItem("axdraw:rooms");
   });
   await page.waitForTimeout(200);
+
+  /* ---------------- a guest is taken to the work ---------------- */
+
+  // Someone opening a room link lands on their own last viewport, which on an
+  // infinite canvas is almost never where the drawing is: the room looks
+  // empty. frameBusiestCluster is what the join path calls once a scene
+  // arrives; it must frame the largest island and grab nothing.
+  await page.evaluate(() => {
+    const app = window.axdraw;
+    const mk = (x, y, i) => ({
+      id: "guest" + i, type: "rectangle", x, y, width: 120, height: 90, angle: 0,
+      strokeColor: "#000", backgroundColor: "transparent", fillStyle: "hachure",
+      strokeWidth: 1, strokeStyle: "solid", roughness: 1, opacity: 100, seed: i,
+      version: 1, updated: Date.now(), isDeleted: false, groupIds: [],
+      boundElements: [], roundness: null, link: null, locked: false,
+    });
+    const elements = [];
+    let i = 0;
+    for (let r = 0; r < 10; r++) for (let c = 0; c < 10; c++) elements.push(mk(40000 + c * 200, 26000 + r * 160, i++));
+    for (let k = 0; k < 5; k++) elements.push(mk(-9000 + k * 180, -12000, i++));
+    app.elements = elements;
+    app.state.selectedIds = new Set();
+    // Park the viewport where a newcomer's browser would be: the origin.
+    app.state.zoom = 1;
+    app.state.scrollX = 0;
+    app.state.scrollY = 0;
+    app.render();
+  });
+
+  const onScreenNow = () =>
+    page.evaluate(() => {
+      const app = window.axdraw;
+      const view = app.viewport;
+      return app.elements.filter((e) => !e.isDeleted).filter((e) => {
+        const x1 = (e.x + view.scrollX) * view.zoom;
+        const y1 = (e.y + view.scrollY) * view.zoom;
+        const x2 = (e.x + e.width + view.scrollX) * view.zoom;
+        const y2 = (e.y + e.height + view.scrollY) * view.zoom;
+        return x2 > 0 && x1 < view.width && y2 > 0 && y1 < view.height;
+      }).length;
+    });
+
+  check("a newcomer's viewport shows nothing to start with", (await onScreenNow()) === 0);
+
+  const framed = await page.evaluate(() => window.axdraw.frameBusiestCluster());
+  await page.waitForTimeout(150);
+  check(
+    "joining frames the island holding the most work",
+    framed && (await onScreenNow()) === 100,
+    `${await onScreenNow()} on screen`,
+  );
+  check(
+    "and grabs nothing — a guest must not arrive holding someone's work",
+    (await page.evaluate(() => window.axdraw.state.selectedIds.size)) === 0,
+  );
+
+  check(
+    "framing an empty canvas reports there was nothing to frame",
+    (await page.evaluate(() => {
+      window.axdraw.elements = [];
+      return window.axdraw.frameBusiestCluster();
+    })) === false,
+  );
+
   await resetView();
 
   /* ---------------- stuck modifiers ---------------- */

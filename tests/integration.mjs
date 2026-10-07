@@ -1,0 +1,378 @@
+/**
+ * Integration tests against the real Worker.
+ *
+ * The e2e suite runs on `vite preview`, which has no relay, no R2 and no
+ * database, so everything that crosses the network — share links, live rooms,
+ * cloud canvases — was only ever tested by hand. This runs the actual
+ * worker/index.js under `wrangler dev` (local Durable Objects, R2, KV and D1,
+ * fresh state every run) and drives several browser profiles against it: a
+ * teacher, a student, and a second device of the same person.
+ *
+ *   npm run build && node tests/integration.mjs
+ *
+ * WRANGLER overrides the wrangler command (default: npx --yes wrangler@4).
+ * PLAYWRIGHT_CHROMIUM points at a specific Chromium binary.
+ */
+
+import { spawn, execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { chromium } from "playwright";
+
+const ROOT = resolve(import.meta.dirname, "..");
+const PORT = Number(process.env.PORT ?? 8797);
+const BASE = `http://localhost:${PORT}`;
+const WRANGLER = (process.env.WRANGLER ?? "npx --yes wrangler@4").split(" ");
+
+let passed = 0;
+let failed = 0;
+function check(name, ok, extra = "") {
+  if (ok) passed++;
+  else failed++;
+  console.log(`${ok ? "  ok  " : "FAIL  "}${name}${extra ? ` :: ${extra}` : ""}`);
+}
+
+const work = mkdtempSync(join(tmpdir(), "axdraw-it-"));
+const config = join(work, "wrangler.toml");
+writeFileSync(
+  config,
+  `name = "axdraw-test"
+main = "${join(ROOT, "worker/index.js")}"
+compatibility_date = "2026-08-01"
+[assets]
+directory = "${join(ROOT, "dist")}"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+[[kv_namespaces]]
+binding = "SCENES"
+id = "test"
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+[[r2_buckets]]
+binding = "ROOM_SCENES"
+bucket_name = "axdraw-rooms"
+[[d1_databases]]
+binding = "DB"
+database_name = "axdraw-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+`,
+);
+const state = join(work, "state");
+
+const server = spawn(
+  WRANGLER[0],
+  [...WRANGLER.slice(1), "dev", "-c", config, "--port", String(PORT), "--persist-to", state],
+  { cwd: work, stdio: "ignore", detached: true },
+);
+
+/** Runs SQL against the local D1 the Worker is using. */
+function sql(command) {
+  const out = execFileSync(
+    WRANGLER[0],
+    [...WRANGLER.slice(1), "d1", "execute", "axdraw-db", "-c", config, "--local", "--persist-to", state, "--json", "--command", command],
+    { cwd: work, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+  );
+  return JSON.parse(out)[0].results;
+}
+
+async function waitForServer(timeoutMs = 90000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      if ((await fetch(BASE)).ok) return;
+    } catch {
+      // Not up yet.
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error("wrangler dev did not start");
+}
+
+let browser;
+try {
+  await waitForServer();
+  browser = await chromium.launch({
+    ...(process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {}),
+    args: ["--no-sandbox"],
+  });
+
+  const errors = [];
+  /** A browser profile: its own localStorage, i.e. its own person or device. */
+  async function profile(name) {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+    await context.addInitScript(() => {
+      window.__copied = [];
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText: async (text) => void window.__copied.push(text) },
+      });
+    });
+    const open = async (url = BASE) => {
+      const page = await context.newPage();
+      page.on("pageerror", (error) => errors.push(`${name}: ${error.message}`));
+      await page.goto(url, { waitUntil: "networkidle" });
+      await page.waitForFunction(() => Boolean(window.axdraw));
+      return page;
+    };
+    return { context, open };
+  }
+
+  const drag = async (page, from, to) => {
+    await page.mouse.move(from[0], from[1]);
+    await page.mouse.down();
+    for (let i = 1; i <= 10; i++) {
+      await page.mouse.move(from[0] + ((to[0] - from[0]) * i) / 10, from[1] + ((to[1] - from[1]) * i) / 10);
+    }
+    await page.mouse.up();
+  };
+  const rect = async (page, from, to) => {
+    await page.keyboard.press("r");
+    await drag(page, from, to);
+    await page.keyboard.press("Escape");
+  };
+  const live = (page) =>
+    page.evaluate(() => window.axdraw.elements.filter((element) => !element.isDeleted).map((element) => element.id));
+  const boards = (page) => page.evaluate(() => window.axdraw.listBoards());
+  const currentName = (page) => page.evaluate(() => window.axdraw.currentBoardName());
+  const lastCopied = (page) => page.evaluate(() => window.__copied[window.__copied.length - 1]);
+  const onScreen = (page) =>
+    page.evaluate(() => {
+      const { zoom, scrollX, scrollY } = window.axdraw.state;
+      const w = innerWidth / zoom;
+      const h = innerHeight / zoom;
+      return window.axdraw.elements.filter(
+        (e) => !e.isDeleted && e.x + scrollX < w && e.x + e.width + scrollX > 0 && e.y + scrollY < h && e.y + e.height + scrollY > 0,
+      ).length;
+    });
+
+  /* -------------------------------------------------- share links -- */
+
+  const teacher = await profile("teacher");
+  let tPage = await teacher.open();
+  await rect(tPage, [300, 300], [420, 380]);
+  await rect(tPage, [700, 500], [820, 580]);
+  await tPage.click(".share-btn");
+  await tPage.click(".share-snapshot");
+  await tPage.waitForFunction(() => window.__copied.length > 0);
+  const shareUrl = await lastCopied(tPage);
+  await tPage.keyboard.press("Escape");
+  check("the Share dialog copies a snapshot link", /#share=/.test(shareUrl ?? ""), shareUrl);
+
+  const student = await profile("student");
+  let sPage = await student.open();
+  // The student's own work, far away where a share used to land on top of it.
+  await sPage.evaluate(() => {
+    window.axdraw.state.scrollX = -5000;
+    window.axdraw.state.scrollY = -5000;
+  });
+  await rect(sPage, [300, 300], [400, 400]);
+  const ownBoard = await sPage.evaluate(() => window.axdraw.currentBoardId());
+  // Straight after it was made — the moment a class opens a link.
+  await sPage.goto(shareUrl, { waitUntil: "networkidle" });
+  await sPage.waitForFunction(() => window.axdraw.currentBoardName().startsWith("받은 그림"), null, { timeout: 10000 });
+  check("a share link opens in a canvas of its own", (await currentName(sPage)).startsWith("받은 그림"), await currentName(sPage));
+  check("the shared drawing is all there", (await live(sPage)).length === 2, `${(await live(sPage)).length} elements`);
+  check("and on screen, not off in the distance", (await onScreen(sPage)) >= 1, `${await onScreen(sPage)} on screen`);
+  const ownStill = await sPage.evaluate(
+    (id) => JSON.parse(localStorage.getItem(`axdraw:scene:${id}`)).elements.filter((e) => !e.isDeleted).length,
+    ownBoard,
+  );
+  check("the student's own canvas is untouched", ownStill === 1, `${ownStill} on their own canvas`);
+  const boardsBefore = (await boards(sPage)).length;
+  await sPage.evaluate((url) => (location.hash = new URL(url).hash), shareUrl);
+  await sPage.waitForTimeout(800);
+  check("opening the same link again reuses that canvas", (await boards(sPage)).length === boardsBefore, `${boardsBefore} -> ${(await boards(sPage)).length}`);
+
+  /* -------------------------------------------------- live rooms -- */
+
+  await tPage.click(".share-btn");
+  await tPage.click(".share-live-start");
+  await tPage.waitForFunction(() => window.__copied.some((text) => text.includes("#room=")));
+  const roomUrl = await lastCopied(tPage);
+  await tPage.keyboard.press("Escape");
+  const roomId = /#room=([A-Za-z0-9]+)/.exec(roomUrl)[1];
+  check("the Share dialog starts a live room", Boolean(roomId), roomUrl);
+  check(
+    "the room belongs to the teacher's canvas",
+    (await tPage.evaluate(() => window.axdraw.listBoards().find((b) => b.id === window.axdraw.currentBoardId())?.room?.id)) === roomId,
+  );
+  const teacherBoards = (await boards(tPage)).length;
+  await tPage.reload({ waitUntil: "networkidle" });
+  await tPage.waitForFunction(() => Boolean(window.axdraw.collab), null, { timeout: 10000 });
+  check(
+    "reloading the owner's tab does not spawn a duplicate canvas",
+    (await boards(tPage)).length === teacherBoards,
+    `${teacherBoards} -> ${(await boards(tPage)).length}`,
+  );
+  await tPage.goto(BASE, { waitUntil: "networkidle" });
+  await tPage.waitForFunction(() => Boolean(window.axdraw.collab), null, { timeout: 10000 });
+  check(
+    "coming back without the link reconnects the canvas to its room",
+    (await tPage.evaluate(() => window.axdraw.collab?.id)) === roomId,
+  );
+
+  await sPage.goto(roomUrl, { waitUntil: "networkidle" });
+  await sPage.waitForFunction(() => window.axdraw.elements.filter((e) => !e.isDeleted).length === 2, null, { timeout: 15000 });
+  check("a student joining sees the teacher's drawing", (await live(sPage)).length === 2);
+
+  // Erase one shape while the student is away; their browser keeps the old copy.
+  const erased = (await live(tPage))[0];
+  await sPage.waitForTimeout(1000); // let the student's copy reach their storage
+  const staleCopy = await sPage.evaluate(
+    () => JSON.parse(localStorage.getItem(`axdraw:scene:${window.axdraw.currentBoardId()}`)).elements.filter((e) => !e.isDeleted).length,
+  );
+  check("the student's browser holds a copy of the room", staleCopy === 2, `${staleCopy} stored`);
+  await sPage.close();
+  await tPage.evaluate((id) => {
+    const app = window.axdraw;
+    app.state.selectedIds = new Set([id]);
+    app.deleteSelection();
+  }, erased);
+  await tPage.close({ runBeforeUnload: true }); // pagehide flushes the room save
+  await new Promise((r) => setTimeout(r, 1500));
+
+  sPage = await student.open(roomUrl);
+  await sPage.waitForFunction(() => Boolean(window.axdraw.collab), null, { timeout: 10000 });
+  await sPage.waitForTimeout(2500);
+  check(
+    "an erased shape stays erased for someone rejoining with an old copy",
+    !(await live(sPage)).includes(erased),
+    JSON.stringify(await live(sPage)),
+  );
+  const observer = await profile("observer");
+  const oPage = await observer.open(roomUrl);
+  await oPage.waitForTimeout(3000);
+  check(
+    "and the rejoin did not bring it back for anyone else",
+    !(await live(oPage)).includes(erased) && (await live(oPage)).length === 1,
+    JSON.stringify(await live(oPage)),
+  );
+
+  // A snapshot opened from inside a room must not leak into the room.
+  await sPage.evaluate((url) => (location.hash = new URL(url).hash), shareUrl);
+  await sPage.waitForTimeout(1500);
+  check("a share link opened inside a room leaves the room", !(await sPage.evaluate(() => Boolean(window.axdraw.collab))));
+  await oPage.waitForTimeout(1500);
+  check("and nothing from it reaches the room", (await live(oPage)).length === 1, `${(await live(oPage)).length} in the room`);
+
+  // Another room's link while in a room switches rooms instead of doing nothing.
+  await oPage.evaluate(() => window.axdraw.newBoard());
+  await oPage.evaluate(() => window.axdraw.startCollab());
+  await oPage.waitForFunction(() => Boolean(window.axdraw.collab));
+  const otherRoom = await oPage.evaluate(() => window.axdraw.collab.url);
+  await sPage.evaluate((url) => (location.hash = new URL(url).hash), roomUrl);
+  await sPage.waitForFunction((id) => window.axdraw.collab?.id === id, roomId, { timeout: 10000 });
+  await sPage.evaluate((url) => (location.hash = new URL(url).hash), otherRoom);
+  await sPage.waitForFunction((url) => window.axdraw.collab?.url === url, otherRoom, { timeout: 10000 }).catch(() => undefined);
+  check(
+    "pasting another room's link while in a room switches to it",
+    (await sPage.evaluate(() => window.axdraw.collab?.url)) === otherRoom,
+  );
+
+  /* -------------------------------------------------- cloud -- */
+
+  const laptop = await profile("laptop");
+  const lPage = await laptop.open();
+  await rect(lPage, [300, 300], [420, 380]);
+  check("the cloud chip starts in 'only in this browser'", (await lPage.getAttribute(".cloud-chip", "data-state")) === "off");
+  await lPage.click(".cloud-chip");
+  await lPage.fill(".cloud-email", "Teacher@Example.com");
+  await lPage.click(".cloud-submit");
+  check(
+    "the required consent cannot be skipped",
+    ((await lPage.textContent(".cloud-error")) ?? "").length > 0 && (await lPage.evaluate(() => !localStorage.getItem("axdraw:cloud"))),
+    await lPage.textContent(".cloud-error"),
+  );
+  await lPage.check(".consent-privacy");
+  await lPage.check(".consent-marketing");
+  await lPage.click(".cloud-submit");
+  await lPage.waitForFunction(() => document.querySelector(".cloud-chip")?.dataset.state === "saved", null, { timeout: 15000 });
+  check("signing up switches cloud saving on", true);
+  let lead = sql("SELECT email, marketing_consent, consent_version FROM leads");
+  check(
+    "the email and both consents are recorded",
+    lead.length === 1 && lead[0].email === "teacher@example.com" && lead[0].marketing_consent === 1,
+    JSON.stringify(lead),
+  );
+
+  await lPage.evaluate(() => window.axdraw.newBoard());
+  await rect(lPage, [500, 400], [620, 480]);
+  await lPage.waitForTimeout(3500);
+  const stored = sql("SELECT id, name, size FROM canvases");
+  check("every canvas is saved to the cloud", stored.length === 2, `${stored.length} canvases`);
+  check("canvas names reach the server encrypted", stored.every((row) => !/캔버스/.test(row.name)), stored.map((r) => r.name.slice(0, 12)).join(","));
+
+  await lPage.click(".cloud-chip");
+  await lPage.click(".cloud-copy-link");
+  const cloudUrl = await lastCopied(lPage);
+  await lPage.keyboard.press("Escape");
+
+  const tablet = await profile("tablet");
+  const tabPage = await tablet.open(cloudUrl);
+  await tabPage.waitForFunction(() => window.axdraw.listBoards().length >= 2, null, { timeout: 15000 });
+  await tabPage.waitForFunction(() => window.axdraw.elements.some((e) => !e.isDeleted), null, { timeout: 15000 });
+  check("the other device lists the same canvases", (await boards(tabPage)).filter((b) => b.cloudSynced || b.remote).length >= 2);
+  check("and opens one with its drawing", (await live(tabPage)).length === 1);
+
+  // Both devices edit the same canvas without seeing each other's save.
+  const shared = await tabPage.evaluate(() => window.axdraw.currentBoardId());
+  await lPage.evaluate((id) => window.axdraw.openBoard(id), shared);
+  await lPage.waitForTimeout(800);
+  await rect(tabPage, [300, 550], [380, 620]);
+  await tabPage.waitForTimeout(3500);
+  await rect(lPage, [700, 550], [780, 620]);
+  await lPage.waitForTimeout(4500);
+  await tabPage.evaluate(() => {
+    const app = window.axdraw;
+    const here = app.currentBoardId();
+    const other = app.listBoards().find((b) => b.id !== here).id;
+    app.openBoard(other);
+    app.openBoard(here);
+  });
+  await tabPage.waitForTimeout(2500);
+  const laptopView = (await live(lPage)).length;
+  const tabletView = (await live(tabPage)).length;
+  check(
+    "edits from two devices to one canvas are both kept",
+    laptopView === 3 && tabletView === 3,
+    `laptop ${laptopView}, tablet ${tabletView}`,
+  );
+
+  await lPage.click(".cloud-chip");
+  await lPage.waitForFunction(() => !document.querySelector(".consent-marketing")?.disabled);
+  await lPage.uncheck(".consent-marketing");
+  await lPage.waitForTimeout(800);
+  lead = sql("SELECT marketing_consent FROM leads");
+  check("the newsletter consent can be withdrawn", lead[0]?.marketing_consent === 0, JSON.stringify(lead));
+
+  lPage.once("dialog", (dialog) => void dialog.accept());
+  await lPage.click(".danger-btn");
+  await lPage.waitForTimeout(1500);
+  const left = sql("SELECT (SELECT count(*) FROM leads) AS leads, (SELECT count(*) FROM workspaces) AS workspaces, (SELECT count(*) FROM canvases) AS canvases");
+  check(
+    "deleting cloud data removes the email and every canvas",
+    left[0].leads === 0 && left[0].workspaces === 0 && left[0].canvases === 0,
+    JSON.stringify(left[0]),
+  );
+  check("and this browser keeps its own copies", (await boards(lPage)).length >= 2);
+
+  check("no page errors", errors.length === 0, errors.join(" | "));
+} catch (error) {
+  failed++;
+  console.error(error);
+} finally {
+  await browser?.close();
+  try {
+    process.kill(-server.pid);
+  } catch {
+    // Already gone.
+  }
+  rmSync(work, { recursive: true, force: true });
+}
+
+console.log(`\n${passed} passed, ${failed} failed`);
+process.exit(failed ? 1 : 0);

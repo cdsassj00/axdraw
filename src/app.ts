@@ -130,15 +130,22 @@ import {
   createBoard,
   currentBoardId,
   deleteBoard,
+  findBoardByRoom,
+  findBoardByShare,
+  getBoard,
   listBoards,
   loadScene,
   renameBoard,
   saveScene,
+  setBoardLink,
   setCurrentBoard,
   type BoardMeta,
 } from "./scene/storage";
-import { createShareLink, loadSharedScene } from "./scene/share";
+import { createShareLink, loadSharedScene, shareIdFromHash } from "./scene/share";
 import { CollabSession, ROOM_HASH_PATTERN } from "./scene/collab";
+import { CloudSync, type CloudHost } from "./scene/cloudSync";
+import { adoptCloudFromHash, registerCloud } from "./scene/cloud";
+import { mergeElements } from "./scene/merge";
 import { renameRecentRoom, roomBoardId, setRoomBoard } from "./scene/recentRooms";
 import { t } from "./i18n";
 import type {
@@ -189,7 +196,7 @@ const TOOL_CURSORS: Partial<Record<ToolType, string>> = {
   image: "crosshair",
 };
 
-export class App {
+export class App implements CloudHost {
   readonly container: HTMLElement;
   readonly staticCanvas: HTMLCanvasElement;
   readonly interactiveCanvas: HTMLCanvasElement;
@@ -328,6 +335,7 @@ export class App {
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
     this.saveTimer = window.setTimeout(() => {
       saveScene(this.elements, this.files, this.state);
+      this.cloud.changed();
       this.saveTimer = null;
     }, 400);
   }
@@ -581,7 +589,10 @@ export class App {
     // canvas in pan mode. Losing focus means we no longer know, so forget.
     window.addEventListener("blur", this.releaseModifiers);
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) this.releaseModifiers();
+      if (!document.hidden) return;
+      this.releaseModifiers();
+      // A hidden tab may never come back; get the last edits to the cloud.
+      this.cloud.flush();
     });
     window.addEventListener("resize", () => this.resize());
     window.addEventListener("paste", this.handlePaste);
@@ -1112,9 +1123,13 @@ export class App {
 
   private applyAngleSnap(element: LinearElement, scene: Point): Point {
     if (!this.shiftKey) {
-      // Nearly-straight strokes settle onto the axis without needing Shift:
-      // within ~4° of horizontal or vertical the wobble is unintentional.
+      // Nearly-straight strokes settle onto the axis without needing Shift.
+      // 4° proved far too tight: a hand on a trackpad or a tablet wanders more
+      // than that, and every slightly-off stroke came out as a visible
+      // diagonal. Within 10° the wobble is almost never intended; Alt opts
+      // out for the rare shallow slope that is.
       const target = this.maybeSnapToGrid(scene);
+      if (this.altKey) return target;
       const anchorIndex = Math.max(0, element.points.length - 2);
       const anchor = {
         x: element.x + element.points[anchorIndex][0],
@@ -1122,7 +1137,7 @@ export class App {
       };
       const dx = target.x - anchor.x;
       const dy = target.y - anchor.y;
-      const ratio = Math.tan((4 * Math.PI) / 180);
+      const ratio = Math.tan((10 * Math.PI) / 180);
       if (Math.abs(dy) <= Math.abs(dx) * ratio) return { x: target.x, y: anchor.y };
       if (Math.abs(dx) <= Math.abs(dy) * ratio) return { x: anchor.x, y: target.y };
       return target;
@@ -2832,6 +2847,28 @@ export class App {
     this.notify();
   }
 
+  /**
+   * Frames the island holding the most work, without selecting it.
+   *
+   * What a newcomer to a room needs: the shared canvas is infinite, and they
+   * arrive at whatever viewport their own browser last had, which is almost
+   * never where the drawing is. `zoomToFit` is the wrong tool here — on a
+   * board with scattered islands it frames the empty space between them.
+   * Selecting, as the finder does, would also be wrong: a guest should not
+   * arrive with several hundred of someone else's elements selected and one
+   * keystroke away from moving them.
+   *
+   * Returns false when there is nothing worth framing.
+   */
+  frameBusiestCluster(): boolean {
+    const clusters = this.listClusters();
+    if (!clusters.length) return false;
+    this.fitEveryone = true; // Arriving in someone else's room, not my own.
+    this.zoomToBounds(clusters[0].bounds);
+    this.notify();
+    return true;
+  }
+
   zoomToSelection(): void {
     this.fitEveryone = false;
     const selected = this.measurable(this.getSelectedElements());
@@ -2905,6 +2942,7 @@ export class App {
     // The recent-rooms list labels rooms by the board name they were seen
     // under, so a rename while connected should follow.
     if (this.collab) renameRecentRoom(this.collab.id, trimmed);
+    this.cloud.renamed(id);
     this.notify();
   }
 
@@ -2916,10 +2954,26 @@ export class App {
     this.onMessage?.(board.name);
   }
 
-  /** Saves the current board and switches to another. */
-  openBoard(id: string): void {
-    if (this.collab) this.stopCollab(); // A board switch is a different document.
+  /**
+   * Saves the current board and switches to another.
+   *
+   * A canvas that has a live room reconnects to it as it opens: the canvas and
+   * its collaboration link are one thing, so going back to it from the canvas
+   * list should not quietly leave you editing an offline copy that nobody else
+   * sees. `connect: false` is for callers that are about to connect themselves.
+   */
+  openBoard(id: string, options: { connect?: boolean } = {}): void {
+    // A board switch is a different document: leave the room, but keep the
+    // board's link to it — that is what lets the board reconnect later.
+    if (this.collab) this.disconnectRoom();
+    if (this.saveTimer !== null) {
+      // A save still pending from the board being left must not land on the
+      // board being opened.
+      window.clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
     saveScene(this.elements, this.files, this.state);
+    this.cloud.flush(); // Reads the board being left while it is still in memory.
     setCurrentBoard(id);
     const loaded = loadScene();
     this.elements = (loaded?.elements ?? []).map((element) =>
@@ -2933,6 +2987,32 @@ export class App {
     this.history.reset(this.elements, this.state.selectedIds);
     if (this.elements.length) this.zoomToFit();
     this.commit();
+    if (options.connect !== false) void this.resumeRoom();
+    void this.cloud.opened(id);
+  }
+
+  /**
+   * Reconnects the open canvas to its room, if it has one. Called when such a
+   * canvas is opened from the list and when the page loads without a link in
+   * the address bar — the owner coming back tomorrow should land back in the
+   * live room, not in a private copy that drifts away from it.
+   */
+  async resumeRoom(): Promise<void> {
+    const room = getBoard(currentBoardId())?.room;
+    if (!room || this.collab) return;
+    const boardId = currentBoardId();
+    try {
+      const session = await CollabSession.join(this, room.id, room.key, { guest: false });
+      // The user may have moved on while the socket was opening.
+      if (currentBoardId() !== boardId || this.collab) {
+        session.destroy();
+        return;
+      }
+      this.collab = session;
+      this.notify();
+    } catch {
+      // Offline: the canvas still works locally and merges on the next visit.
+    }
   }
 
   deleteBoard(id: string): void {
@@ -2942,6 +3022,7 @@ export class App {
       return;
     }
     deleteBoard(id);
+    void this.cloud.deleted(id);
     if (id === currentBoardId()) {
       const next = listBoards()[0];
       this.openBoard(next.id);
@@ -2983,6 +3064,56 @@ export class App {
   }
 
   /* ---------------------------------------------------------------- *
+   * Cloud canvases
+   * ---------------------------------------------------------------- */
+
+  readonly cloud: CloudSync = new CloudSync(this);
+
+  currentScene(): { elements: readonly AxElement[]; files: BinaryFiles } {
+    return { elements: this.elements, files: this.files };
+  }
+
+  /** A newer copy from another device, merged without touching undo. */
+  mergeIntoCurrent(remote: readonly unknown[], files: BinaryFiles): void {
+    const wasEmpty = !this.elements.some((element) => !element.isDeleted);
+    this.elements = mergeElements(this.elements, remote);
+    Object.assign(this.files, files);
+    this.history.reset(this.elements, this.state.selectedIds);
+    if (wasEmpty && !this.frameBusiestCluster()) this.zoomToFit();
+    this.scheduleRender();
+    if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    saveScene(this.elements, this.files, this.state);
+    // A room canvas arriving from another device reconnects to its room.
+    void this.resumeRoom();
+    this.notify();
+  }
+
+  onCloudChanged(): void {
+    this.notify();
+  }
+
+  /** On load: a #cloud=… link adopts a workspace, then everything syncs. */
+  async startCloud(): Promise<void> {
+    const adopted = adoptCloudFromHash();
+    if (adopted) this.onMessage?.(t("Loading your cloud canvases…"));
+    const here = new Set(listBoards().map((board) => board.id));
+    await this.cloud.reconcile();
+    if (!adopted) return;
+    // The point of the link is to see the canvases from the other device,
+    // not whatever blank canvas this browser happened to start on.
+    const newest = listBoards().find((board) => !here.has(board.id));
+    if (newest && newest.id !== currentBoardId()) this.openBoard(newest.id);
+  }
+
+  /** Switches cloud saving on: records the email and consents, uploads. */
+  async enableCloud(email: string, consent: { privacy: boolean; marketing: boolean }): Promise<void> {
+    await registerCloud(email, consent);
+    await this.cloud.reconcile();
+    this.onMessage?.(t("Cloud saving is on — every canvas is now backed up"));
+  }
+
+  /* ---------------------------------------------------------------- *
    * Live collaboration
    * ---------------------------------------------------------------- */
 
@@ -2998,6 +3129,14 @@ export class App {
     try {
       if (!this.collab) {
         this.collab = await CollabSession.create(this);
+        // The room belongs to this canvas from now on: reloading, or opening
+        // the canvas from the list, comes back to the same room. Without this
+        // a reload of the owner's own tab treated them as a guest and gave the
+        // room a second, duplicate canvas.
+        const room = { id: this.collab.id, key: this.collab.keyText };
+        setBoardLink(currentBoardId(), { room });
+        setRoomBoard(room.id, room.key, currentBoardId());
+        this.notify();
       }
       await navigator.clipboard.writeText(this.collab.url);
       this.onMessage?.(t("Collaboration link copied — anyone with it can draw with you"));
@@ -3006,10 +3145,18 @@ export class App {
     }
   }
 
+  /** Stops sharing this canvas live. The canvas keeps its drawing. */
   stopCollab(): void {
+    this.disconnectRoom();
+    setBoardLink(currentBoardId(), { room: undefined });
+    this.onMessage?.(t("Left the collaboration room"));
+    this.notify();
+  }
+
+  /** Leaves the room without forgetting that this canvas belongs to it. */
+  private disconnectRoom(): void {
     this.collab?.destroy();
     this.collab = null;
-    this.onMessage?.(t("Left the collaboration room"));
   }
 
   /**
@@ -3023,28 +3170,54 @@ export class App {
    * board, so the room's history is not scattered across new canvases.
    */
   private enterRoomBoard(roomId: string, keyText: string): void {
-    const existing = roomBoardId(roomId);
-    if (existing && listBoards().some((board) => board.id === existing)) {
-      if (currentBoardId() !== existing) this.openBoard(existing);
+    const legacy = roomBoardId(roomId);
+    const existing =
+      findBoardByRoom(roomId) ?? (legacy ? listBoards().find((board) => board.id === legacy) : undefined);
+    if (existing) {
+      setBoardLink(existing.id, { room: { id: roomId, key: keyText } });
+      if (currentBoardId() !== existing.id) this.openBoard(existing.id, { connect: false });
       return;
+    }
+    const board = this.blankBoardForArrival(`협업 ${roomId.slice(0, 6)}`);
+    setBoardLink(board, { room: { id: roomId, key: keyText } });
+    setRoomBoard(roomId, keyText, board);
+  }
+
+  /**
+   * A canvas for something arriving from a link. A student opening their
+   * first link lands on an empty "캔버스 1"; filling that one avoids leaving a
+   * stray blank canvas behind. Anything with content, or already tied to a
+   * room, is never reused — that is how drawings used to get mixed together.
+   */
+  private blankBoardForArrival(name: string): string {
+    const current = getBoard(currentBoardId());
+    const empty = !this.elements.some((element) => !element.isDeleted);
+    if (current && empty && !current.room && !current.shareId) {
+      renameBoard(current.id, name);
+      return current.id;
     }
     saveScene(this.elements, this.files, this.state);
     const board = createBoard();
-    renameBoard(board.id, `협업 ${roomId.slice(0, 6)}`);
-    this.openBoard(board.id);
-    setRoomBoard(roomId, keyText, board.id);
+    renameBoard(board.id, name);
+    this.openBoard(board.id, { connect: false });
+    return board.id;
   }
 
   /** Joins a room when the page was opened through a #room=… link. */
   async joinCollabFromHash(): Promise<void> {
     const match = ROOM_HASH_PATTERN.exec(location.hash);
-    if (!match || this.collab) return;
+    if (!match) return;
+    if (this.collab?.id === match[1]) return;
+    // Opening a different room's link while in one used to do nothing at
+    // all: the tab stayed in the old room with no hint why.
+    if (this.collab) this.disconnectRoom();
     try {
       // Before connecting: openBoard() stops any session, and the socket
       // broadcasts on open, so the right board must already be current.
       this.enterRoomBoard(match[1], match[2]);
       this.collab = await CollabSession.join(this, match[1], match[2]);
       this.onMessage?.(t("Joined the collaboration room"));
+      this.notify();
     } catch (error) {
       this.onError?.(error instanceof Error ? error.message : "Could not join the room");
     }
@@ -3056,25 +3229,11 @@ export class App {
    * does not re-commit — the sender already owns that change.
    */
   applyRemoteScene(remote: readonly AxElement[], files: BinaryFiles): void {
-    const merged = new Map<string, AxElement>();
-    for (const element of this.elements) merged.set(element.id, element);
-    for (const raw of remote) {
-      // Every other way elements enter the scene — opening a file, loading a
-      // shared link, restoring from storage — runs them through the normaliser.
-      // This path did not, so whatever a peer sent went straight in, including
-      // geometry the rest of the editor cannot work with.
-      const element = normalizeImportedElement(raw as unknown as Record<string, unknown>);
-      if (!merged.has(element.id)) this.remoteElementIds.add(element.id);
-      const local = merged.get(element.id);
-      if (
-        !local ||
-        element.version > local.version ||
-        (element.version === local.version && element.updated > local.updated)
-      ) {
-        merged.set(element.id, element);
-      }
-    }
-    this.elements = [...merged.values()];
+    // Every other way elements enter the scene — opening a file, loading a
+    // shared link, restoring from storage — runs them through the normaliser;
+    // mergeElements does the same for whatever a peer sent.
+    this.elements = mergeElements(this.elements, remote, (id) => this.remoteElementIds.add(id));
+    const merged = new Map(this.elements.map((element) => [element.id, element]));
     Object.assign(this.files, files);
     this.state.selectedIds = new Set(
       [...this.state.selectedIds].filter((id) => {
@@ -3087,11 +3246,34 @@ export class App {
     this.notify();
   }
 
-  /** Replaces the canvas with a scene fetched from a share link, if present. */
+  /**
+   * Opens a shared drawing in a canvas of its own.
+   *
+   * This used to replace whatever canvas was open: the recipient's own work
+   * was overwritten, and if that tab was in a live room the shared drawing was
+   * broadcast into the room while the room's old elements merged straight
+   * back in — the "old drawings mixed in" that students saw. A share is a
+   * copy, so it gets its own canvas, and the same link opened twice returns
+   * to the same canvas instead of piling up duplicates.
+   */
   async loadFromShareLink(): Promise<void> {
+    const id = shareIdFromHash();
+    if (!id) return;
     try {
-      const scene = await loadSharedScene();
-      if (!scene) return;
+      const existing = findBoardByShare(id);
+      if (existing) {
+        history.replaceState(null, "", location.pathname + location.search);
+        if (currentBoardId() !== existing.id) this.openBoard(existing.id, { connect: false });
+        this.frameBusiestCluster();
+        this.onMessage?.(t("Opened a shared drawing"));
+        return;
+      }
+      const shared = await loadSharedScene();
+      if (!shared) return;
+      const { scene } = shared;
+      if (this.collab) this.disconnectRoom();
+      const board = this.blankBoardForArrival(`받은 그림 ${new Date().toLocaleDateString()}`);
+      setBoardLink(board, { shareId: id });
       this.elements = scene.elements;
       this.files = scene.files;
       this.state.selectedIds = new Set();
@@ -3101,7 +3283,9 @@ export class App {
       clearShapeCache();
       clearImageCache();
       this.history.reset(this.elements, this.state.selectedIds);
-      this.zoomToFit();
+      // The busiest island, not everything: on a scattered drawing a full fit
+      // shrinks the work to specks and students report a blank canvas.
+      if (!this.frameBusiestCluster()) this.zoomToFit();
       this.commit();
       this.onMessage?.(t("Opened a shared drawing"));
     } catch (error) {

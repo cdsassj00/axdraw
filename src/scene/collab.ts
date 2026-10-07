@@ -15,7 +15,7 @@
  * enough that per-element LWW converges fine in practice.
  *
  * The relay is still only a relay, but the room is no longer ephemeral: the
- * scene is also written to KV as ciphertext, throttled, and read back on
+ * scene is also written to R2 as ciphertext, throttled, and read back on
  * join. That is what makes the room link sufficient on its own — before it,
  * keeping a room's work meant also minting a share link, which froze at the
  * moment it was made and had to be re-minted (as a new link) to catch up.
@@ -74,13 +74,22 @@ export class CollabSession {
   private sceneTimer: number | null = null;
   private saveTimer: number | null = null;
   private restored = false;
+  private broadcastPending = false;
+  private framePending = false;
+  private detachFrameCancel: (() => void) | null = null;
   private sawPeerScene = false;
   private lastCursorSent = 0;
   private sentFileIds = new Set<string>();
   private raf = 0;
   private detachPointer: (() => void) | null = null;
 
-  private constructor(app: App, private roomId: string, private keyBytes: Uint8Array<ArrayBuffer>) {
+  private constructor(
+    app: App,
+    private roomId: string,
+    private keyBytes: Uint8Array<ArrayBuffer>,
+    /** Joined someone else's link, rather than opened a room of my own. */
+    private readonly guest = false,
+  ) {
     this.app = app;
     this.url = `${location.origin}${location.pathname}#room=${roomId},${toBase64Url(keyBytes)}`;
     this.cursorLayer = document.createElement("div");
@@ -93,14 +102,28 @@ export class CollabSession {
     return this.roomId;
   }
 
+  /** The room key as it appears in the link. */
+  get keyText(): string {
+    return toBase64Url(this.keyBytes);
+  }
+
   /** Creates a fresh room and connects to it. */
   static create(app: App): Promise<CollabSession> {
     return new CollabSession(app, randomId(), generateKeyBytes()).connect();
   }
 
-  /** Joins the room named in an existing link's fragment pieces. */
-  static join(app: App, roomId: string, keyText: string): Promise<CollabSession> {
-    return new CollabSession(app, roomId, fromBase64Url(keyText)).connect();
+  /**
+   * Joins the room named in an existing link's fragment pieces. `guest` is
+   * false when the owner's own canvas reconnects to its room — they are
+   * already looking at their work and must not have the view moved.
+   */
+  static join(
+    app: App,
+    roomId: string,
+    keyText: string,
+    options: { guest?: boolean } = {},
+  ): Promise<CollabSession> {
+    return new CollabSession(app, roomId, fromBase64Url(keyText), options.guest ?? true).connect();
   }
 
   /**
@@ -128,14 +151,15 @@ export class CollabSession {
           );
           if (Array.isArray(scene.elements) && scene.elements.length) {
             this.app.applyRemoteScene(scene.elements, scene.files ?? {});
+            this.frameOnArrival();
           }
-          this.restored = true;
+          this.markRestored();
           return;
         }
         // A miss from a consistent store is the truth: the room is new, and
         // waiting would only stop a first drawing from being saved.
         if (response.headers.get("x-room-store") === "r2") {
-          this.restored = true;
+          this.markRestored();
           return;
         }
       } catch {
@@ -145,8 +169,52 @@ export class CollabSession {
       if (this.sawPeerScene) break;
       await new Promise((resolve) => setTimeout(resolve, wait));
     }
-    this.restored = true;
+    this.markRestored();
   }
+
+  /**
+   * From here on this tab may speak for the room.
+   *
+   * Broadcasting before the saved scene has loaded let a stale local copy —
+   * a canvas last opened days ago — announce elements that others had since
+   * deleted. A peer that had reloaded no longer held the deletion in memory,
+   * accepted them as new, and saved them: old drawings came back from the
+   * dead. Holding the first broadcast until the room's save has been merged
+   * in means what goes out already carries those deletions.
+   */
+  private markRestored(): void {
+    if (this.restored) return;
+    this.restored = true;
+    if (this.broadcastPending) {
+      this.broadcastPending = false;
+      this.queueBroadcast();
+    }
+  }
+
+  /**
+   * Takes a newcomer to the work.
+   *
+   * A guest opens the link and lands on their own last viewport, which on an
+   * infinite canvas is almost never where the drawing is — the room looks
+   * empty and they have to hunt for it. The first scene to arrive, from
+   * storage or from a peer, is the cue to frame the busiest island.
+   *
+   * Only once, and only until the guest touches anything: someone who has
+   * already started panning has chosen their own view, and yanking the
+   * canvas out from under them would be worse than the blank screen.
+   */
+  private frameOnArrival(): void {
+    if (!this.framePending) return;
+    this.framePending = false;
+    this.cancelFraming();
+    this.app.frameBusiestCluster();
+  }
+
+  private cancelFraming = (): void => {
+    this.framePending = false;
+    this.detachFrameCancel?.();
+    this.detachFrameCancel = null;
+  };
 
   /**
    * Saves the room. Throttled well clear of KV's one-write-per-second per
@@ -165,8 +233,11 @@ export class CollabSession {
     // Never write before knowing what is already there — see restoreSaved().
     if (!this.restored) return;
     try {
+      // Deletions are saved too. Without them a returning collaborator's
+      // older copy of an erased shape has nothing newer to lose to, and the
+      // shape reappears for everyone.
       const payload = await encryptJson(this.key, {
-        elements: this.app.elements.filter((element) => !element.isDeleted),
+        elements: this.app.elements,
         files: this.app.files,
       });
       await fetch(`${API_BASE}/api/rooms/${this.roomId}/scene`, {
@@ -223,6 +294,18 @@ export class CollabSession {
     // The relay stores nothing, so this list is the only way back into a room
     // once its link leaves the address bar.
     rememberRoom(this.roomId, toBase64Url(this.keyBytes), this.app.currentBoardName());
+    if (this.guest) {
+      this.framePending = true;
+      const target = this.app.container;
+      target.addEventListener("pointerdown", this.cancelFraming);
+      target.addEventListener("wheel", this.cancelFraming, { passive: true });
+      window.addEventListener("keydown", this.cancelFraming);
+      this.detachFrameCancel = () => {
+        target.removeEventListener("pointerdown", this.cancelFraming);
+        target.removeEventListener("wheel", this.cancelFraming);
+        window.removeEventListener("keydown", this.cancelFraming);
+      };
+    }
     void this.restoreSaved();
     window.addEventListener("pagehide", this.onPageHide);
     document.addEventListener("visibilitychange", this.onVisibility);
@@ -267,6 +350,10 @@ export class CollabSession {
   }
 
   private async broadcastScene(): Promise<void> {
+    if (!this.restored) {
+      this.broadcastPending = true;
+      return;
+    }
     // Send files only once per session — they are immutable blobs, and
     // re-sending pasted images on every stroke would swamp the socket.
     const files: BinaryFiles = {};
@@ -313,8 +400,11 @@ export class CollabSession {
         // own next save. Saving on every peer frame would multiply writes by
         // the number of people in the room.
         this.sawPeerScene = true;
-        this.restored = true; // A live peer is a better source than storage.
         this.app.applyRemoteScene(message.elements, message.files);
+        // A peer only broadcasts once it has merged the room's save, so its
+        // scene is at least as current as storage.
+        this.markRestored();
+        if (message.elements.length) this.frameOnArrival();
         break;
       case "cursor":
         this.updateCursor(message.from, message.x, message.y);
@@ -373,6 +463,7 @@ export class CollabSession {
     // Flush before closing: the throttle window is several seconds, and
     // leaving is exactly when the last edits must not be lost.
     this.flushSave();
+    this.cancelFraming();
     window.removeEventListener("pagehide", this.onPageHide);
     document.removeEventListener("visibilitychange", this.onVisibility);
     this.closed = true;

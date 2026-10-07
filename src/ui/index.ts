@@ -27,6 +27,7 @@ import { iconEl } from "./icons";
 import { createCommandPalette } from "./commandPalette";
 import { createRecognitionChip } from "./recognitionChip";
 import { forgetRoom, listRecentRooms, roomUrl } from "../scene/recentRooms";
+import { cloudChipLabel, openCloudDialog, openShareDialog } from "./shareCloud";
 
 interface ToolDefinition {
   tool: ToolType;
@@ -59,6 +60,13 @@ export function createUI(app: App): void {
 
   const topLeft = h("div", { class: "top-left" });
   const boardName = boardNameField(app);
+  // Where the canvas is kept, always in view: "only in this browser" is the
+  // state that loses work, so it doubles as the way to switch the cloud on.
+  const cloudChip = h("button", {
+    class: "cloud-chip",
+    type: "button",
+    onclick: () => openCloudDialog(app),
+  });
   const toolIsland = h("div", { class: "island", style: { padding: "6px" } });
   const toolbar = h("div", { class: "toolbar island" });
   const topRight = h("div", { class: "top-right" });
@@ -82,6 +90,7 @@ export function createUI(app: App): void {
         }),
         h("span", { class: "brand", text: "axdraw" }),
         boardName,
+        cloudChip,
       ],
     ),
     toolIsland,
@@ -219,6 +228,10 @@ export function createUI(app: App): void {
     // The board can change under us: a new canvas, a switch, a shared scene
     // loading. Refresh the field unless the user is in the middle of typing.
     if (document.activeElement !== boardName) boardName.value = app.currentBoardName();
+    const cloud = cloudChipLabel(app);
+    cloudChip.textContent = cloud.text;
+    cloudChip.title = cloud.title;
+    cloudChip.dataset.state = cloud.state;
 
     topRight.replaceChildren(
       ...(COFFEE_URL
@@ -234,11 +247,11 @@ export function createUI(app: App): void {
           ]
         : []),
       h("button", {
-        class: "primary-btn share-btn",
+        class: `primary-btn share-btn${app.collab ? " is-live" : ""}`,
         type: "button",
-        text: t("Share"),
-        title: t("Share link…"),
-        onclick: () => void app.shareLink(),
+        text: app.collab ? t("● Live") : t("Share"),
+        title: app.collab ? t("This canvas is shared live — click for the link") : t("Share this canvas"),
+        onclick: () => openShareDialog(app),
       }),
       h("div", { class: "island", style: { display: "flex", gap: "2px", padding: "6px" } }, [
         button({
@@ -874,14 +887,9 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
     menuItem("image", "Export image…", "Ctrl+E", run(() => openExportDialog(app))),
     menuItem("copy", "Copy canvas to clipboard", null, run(() => void app.copyPngToClipboard())),
     menuItem("copy", "Copy canvas as SVG", null, run(() => void app.copySvgToClipboard())),
-    menuItem("link", "Share link…", null, run(() => void app.shareLink())),
-    menuItem(
-      "users",
-      app.collab ? "Stop live collaboration" : "Live collaboration…",
-      null,
-      run(() => (app.collab ? app.stopCollab() : void app.startCollab())),
-    ),
+    menuItem("link", "Share this canvas…", null, run(() => openShareDialog(app))),
     menuItem("users", "Recent rooms…", null, run(() => openRoomsDialog(app))),
+    menuItem("upload", "Cloud saving…", null, run(() => openCloudDialog(app))),
     h("div", { class: "dropdown-separator" }),
     menuItem("grid", `Grid: ${app.state.gridEnabled ? "on" : "off"}`, "Ctrl+'", run(() => app.toggleGrid())),
     menuItem("selection", `Object snapping: ${app.state.snapEnabled ? "on" : "off"}`, null, run(() => {
@@ -1089,7 +1097,12 @@ function openBoardsDialog(app: App): void {
               },
             },
             [
-              h("span", { class: "board-name", text: board.name }),
+              h("span", { class: "board-name" }, [
+                board.name,
+                board.room ? h("span", { class: "board-badge is-live", text: t("Live") }) : null,
+                board.shareId ? h("span", { class: "board-badge", text: t("Received copy") }) : null,
+                board.remote ? h("span", { class: "board-badge", text: t("In the cloud") }) : null,
+              ]),
               h("span", { class: "board-date", text: new Date(board.updated).toLocaleString() }),
             ],
           ),
@@ -1134,6 +1147,17 @@ function openBoardsDialog(app: App): void {
           },
         }),
       ]),
+      app.cloud.account
+        ? null
+        : h("button", {
+            class: "cloud-banner",
+            type: "button",
+            text: t("These canvases are only in this browser. Save them to the cloud for free →"),
+            onclick: () => {
+              close();
+              openCloudDialog(app);
+            },
+          }),
       list,
     ]),
   );
@@ -1214,7 +1238,7 @@ function openRoomsDialog(app: App): void {
       h("div", { class: "modal-header" }, [h("h2", { text: t("Recent rooms") })]),
       h("p", {
         class: "rooms-note",
-        text: t("Rooms are relayed, not stored. This list lives in this browser only."),
+        text: t("A room's drawing is saved on the server, encrypted. This list of links lives in this browser only."),
       }),
       list,
     ]),

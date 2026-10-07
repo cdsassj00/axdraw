@@ -47,12 +47,17 @@ export async function createShareLink(
   return `${location.origin}${location.pathname}#share=${id},${toBase64Url(keyBytes)}`;
 }
 
+/** The share id in the address bar, if the page was opened through a share link. */
+export function shareIdFromHash(): string | null {
+  return HASH_PATTERN.exec(location.hash)?.[1] ?? null;
+}
+
 /**
  * If the page was opened through a share link, fetches and decrypts the scene.
  * Returns null when there is no share fragment. Clears the fragment on success
  * so a reload shows the user's own (autosaved) canvas again.
  */
-export async function loadSharedScene(): Promise<ParsedScene | null> {
+export async function loadSharedScene(): Promise<{ id: string; scene: ParsedScene } | null> {
   const match = HASH_PATTERN.exec(location.hash);
   if (!match) return null;
   const [, id, keyText] = match;
@@ -66,5 +71,5 @@ export async function loadSharedScene(): Promise<ParsedScene | null> {
   const scene = parseScene(new TextDecoder().decode(plaintext));
 
   history.replaceState(null, "", location.pathname + location.search);
-  return scene;
+  return { id, scene };
 }

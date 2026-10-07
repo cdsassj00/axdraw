@@ -8,10 +8,17 @@ if (!root) throw new Error("#root is missing from the page");
 const app = new App(root);
 createUI(app);
 
-// Opened through a share link? Fetch and decrypt it over the autosaved scene.
+// Opened through a share link? Fetch and decrypt it into a canvas of its own.
 // A #room=… link instead joins a live collaboration session.
-void app.loadFromShareLink();
-void app.joinCollabFromHash();
+// With neither, a canvas that belongs to a live room reconnects to it — the
+// owner's tab comes back to the room the next day instead of a private copy.
+if (location.hash.startsWith("#share=")) void app.loadFromShareLink();
+else if (location.hash.startsWith("#room=")) void app.joinCollabFromHash();
+else if (!location.hash.startsWith("#cloud=")) void app.resumeRoom();
+
+// Cloud canvases: lists what other devices saved, uploads what is new here.
+// A #cloud=… link (from "open on another device") adopts that workspace first.
+void app.startCloud();
 
 // Pasting a link into a tab that already has axdraw open only changes the
 // fragment, which is a same-document navigation: nothing reloads, so without
