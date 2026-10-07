@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "deploy": "npm run build && npx wrangler deploy",
-    "test:e2e": "npm run build && node tests/e2e.mjs"
+    "test:e2e": "npm run build && node tests/e2e.mjs",
+    "test:integration": "npm run build && node tests/integration.mjs"
   },
   "devDependencies": {
     "playwright": "^1.49.1",

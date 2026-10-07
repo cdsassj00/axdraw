@@ -15,7 +15,7 @@
  * enough that per-element LWW converges fine in practice.
  *
  * The relay is still only a relay, but the room is no longer ephemeral: the
- * scene is also written to KV as ciphertext, throttled, and read back on
+ * scene is also written to R2 as ciphertext, throttled, and read back on
  * join. That is what makes the room link sufficient on its own — before it,
  * keeping a room's work meant also minting a share link, which froze at the
  * moment it was made and had to be re-minted (as a new link) to catch up.
@@ -74,6 +74,7 @@ export class CollabSession {
   private sceneTimer: number | null = null;
   private saveTimer: number | null = null;
   private restored = false;
+  private broadcastPending = false;
   private framePending = false;
   private detachFrameCancel: (() => void) | null = null;
   private sawPeerScene = false;
@@ -101,14 +102,28 @@ export class CollabSession {
     return this.roomId;
   }
 
+  /** The room key as it appears in the link. */
+  get keyText(): string {
+    return toBase64Url(this.keyBytes);
+  }
+
   /** Creates a fresh room and connects to it. */
   static create(app: App): Promise<CollabSession> {
     return new CollabSession(app, randomId(), generateKeyBytes()).connect();
   }
 
-  /** Joins the room named in an existing link's fragment pieces. */
-  static join(app: App, roomId: string, keyText: string): Promise<CollabSession> {
-    return new CollabSession(app, roomId, fromBase64Url(keyText), true).connect();
+  /**
+   * Joins the room named in an existing link's fragment pieces. `guest` is
+   * false when the owner's own canvas reconnects to its room — they are
+   * already looking at their work and must not have the view moved.
+   */
+  static join(
+    app: App,
+    roomId: string,
+    keyText: string,
+    options: { guest?: boolean } = {},
+  ): Promise<CollabSession> {
+    return new CollabSession(app, roomId, fromBase64Url(keyText), options.guest ?? true).connect();
   }
 
   /**
@@ -138,13 +153,13 @@ export class CollabSession {
             this.app.applyRemoteScene(scene.elements, scene.files ?? {});
             this.frameOnArrival();
           }
-          this.restored = true;
+          this.markRestored();
           return;
         }
         // A miss from a consistent store is the truth: the room is new, and
         // waiting would only stop a first drawing from being saved.
         if (response.headers.get("x-room-store") === "r2") {
-          this.restored = true;
+          this.markRestored();
           return;
         }
       } catch {
@@ -154,7 +169,26 @@ export class CollabSession {
       if (this.sawPeerScene) break;
       await new Promise((resolve) => setTimeout(resolve, wait));
     }
+    this.markRestored();
+  }
+
+  /**
+   * From here on this tab may speak for the room.
+   *
+   * Broadcasting before the saved scene has loaded let a stale local copy —
+   * a canvas last opened days ago — announce elements that others had since
+   * deleted. A peer that had reloaded no longer held the deletion in memory,
+   * accepted them as new, and saved them: old drawings came back from the
+   * dead. Holding the first broadcast until the room's save has been merged
+   * in means what goes out already carries those deletions.
+   */
+  private markRestored(): void {
+    if (this.restored) return;
     this.restored = true;
+    if (this.broadcastPending) {
+      this.broadcastPending = false;
+      this.queueBroadcast();
+    }
   }
 
   /**
@@ -199,8 +233,11 @@ export class CollabSession {
     // Never write before knowing what is already there — see restoreSaved().
     if (!this.restored) return;
     try {
+      // Deletions are saved too. Without them a returning collaborator's
+      // older copy of an erased shape has nothing newer to lose to, and the
+      // shape reappears for everyone.
       const payload = await encryptJson(this.key, {
-        elements: this.app.elements.filter((element) => !element.isDeleted),
+        elements: this.app.elements,
         files: this.app.files,
       });
       await fetch(`${API_BASE}/api/rooms/${this.roomId}/scene`, {
@@ -313,6 +350,10 @@ export class CollabSession {
   }
 
   private async broadcastScene(): Promise<void> {
+    if (!this.restored) {
+      this.broadcastPending = true;
+      return;
+    }
     // Send files only once per session — they are immutable blobs, and
     // re-sending pasted images on every stroke would swamp the socket.
     const files: BinaryFiles = {};
@@ -359,8 +400,10 @@ export class CollabSession {
         // own next save. Saving on every peer frame would multiply writes by
         // the number of people in the room.
         this.sawPeerScene = true;
-        this.restored = true; // A live peer is a better source than storage.
         this.app.applyRemoteScene(message.elements, message.files);
+        // A peer only broadcasts once it has merged the room's save, so its
+        // scene is at least as current as storage.
+        this.markRestored();
         if (message.elements.length) this.frameOnArrival();
         break;
       case "cursor":

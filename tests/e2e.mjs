@@ -157,14 +157,82 @@ try {
   });
   check("an arrow binds to the shapes at both ends", binding.start && binding.end, JSON.stringify(binding));
 
+  const arrowEnds = () =>
+    page.evaluate(() => {
+      const arrow = window.axdraw.elements.find((element) => element.type === "arrow");
+      const last = arrow.points[arrow.points.length - 1];
+      return {
+        start: [Math.round(arrow.x), Math.round(arrow.y)],
+        end: [Math.round(arrow.x + last[0]), Math.round(arrow.y + last[1])],
+      };
+    });
+  const ellipseTop = () =>
+    page.evaluate(() => Math.round(window.axdraw.elements.find((element) => element.type === "ellipse").y));
+
+  // Binding used to aim each end at the shape's centre, so the arrow tilted
+  // the moment it attached unless both centres were exactly level — and
+  // again on every nudge. Select the ellipse by its top edge, then drag it by
+  // a point on its outline that is not a resize handle.
   await page.keyboard.press("v");
   await page.mouse.click(770, 300);
-  await drag([770, 300], [770, 200]);
-  const tipY = await page.evaluate(() => {
-    const arrow = window.axdraw.elements.find((element) => element.type === "arrow");
-    return Math.round(arrow.y + arrow.points[arrow.points.length - 1][1]);
-  });
-  check("a bound arrow follows the shape it points at", tipY < 340, `tip y = ${tipY}`);
+  await drag([819, 385], [819, 415]);
+  const nudged = await arrowEnds();
+  check(
+    "a bound arrow stays straight when its shape moves a little",
+    (await ellipseTop()) === 330 && nudged.start[1] === nudged.end[1],
+    JSON.stringify(nudged),
+  );
+
+  await drag([819, 415], [819, 715]);
+  const followed = await arrowEnds();
+  check(
+    "a bound arrow follows the shape once no straight line reaches it",
+    (await ellipseTop()) === 630 && followed.end[1] > 560,
+    JSON.stringify(followed),
+  );
+
+  /* ---------------- straight arrows ---------------- */
+
+  const lastArrowAngle = () =>
+    page.evaluate(() => {
+      const arrow = window.axdraw.elements.filter((element) => element.type === "arrow" && !element.isDeleted).pop();
+      const [sx, sy] = arrow.points[0];
+      const [ex, ey] = arrow.points[arrow.points.length - 1];
+      return {
+        angle: Number(((Math.atan2(ey - sy, ex - sx) * 180) / Math.PI).toFixed(1)),
+        bound: Boolean(arrow.startBinding && arrow.endBinding),
+      };
+    });
+
+  // Two boxes whose centres sit 20px apart vertically: the exact layout that
+  // turned a perfectly level arrow into a 3.4° diagonal on release.
+  await resetView();
+  await page.keyboard.press("r");
+  await drag([300, 300], [420, 380]);
+  await page.keyboard.press("r");
+  await drag([600, 280], [760, 440]);
+  await page.keyboard.press("a");
+  await drag([425, 320], [595, 320]);
+  const level = await lastArrowAngle();
+  check("a level arrow between offset boxes stays level once bound", level.bound && level.angle === 0, JSON.stringify(level));
+
+  await page.keyboard.press("a");
+  await drag([425, 360], [595, 382]);
+  const wobble = await lastArrowAngle();
+  check("a hand wobble of ~7° still comes out level", wobble.angle === 0, JSON.stringify(wobble));
+
+  await resetView();
+  await page.keyboard.press("a");
+  await drag([300, 300], [600, 520]);
+  const diagonal = await lastArrowAngle();
+  check("a deliberate diagonal stays diagonal", Math.abs(diagonal.angle - 36.3) < 1, JSON.stringify(diagonal));
+
+  await page.keyboard.press("a");
+  await page.keyboard.down("Alt");
+  await drag([300, 600], [600, 630]);
+  await page.keyboard.up("Alt");
+  const shallow = await lastArrowAngle();
+  check("Alt keeps a shallow slope that would otherwise snap", Math.abs(shallow.angle - 5.7) < 1, JSON.stringify(shallow));
 
   /* ---------------- text ---------------- */
 

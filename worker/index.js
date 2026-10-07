@@ -11,6 +11,13 @@
  *   PUT  /api/rooms/:id/scene    body: iv‖ciphertext   → { "ok": true }
  *   GET  /api/rooms/:id/scene                          → the same bytes
  *
+ *   POST   /api/cloud/register      email + consents     → { "workspace": "…" }
+ *   GET    /api/cloud/canvases      (Bearer)             → [{ id, name, updated }]
+ *   GET    /api/cloud/canvases/:id  (Bearer)             → iv‖ciphertext
+ *   PUT    /api/cloud/canvases/:id  (Bearer, x-base-version) → { updated } | 409
+ *   DELETE /api/cloud/canvases/:id  (Bearer)
+ *   GET|DELETE /api/cloud/account, POST /api/cloud/consent  (Bearer)
+ *
  * CORS is open on purpose: ids are unguessable (60 bits) and the content is
  * ciphertext, so the origin of the reader adds no protection worth having,
  * while an open policy lets a GitHub Pages build use this Worker as its API.
@@ -21,9 +28,9 @@ const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456
 
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
-  "access-control-allow-headers": "content-type, x-ai-key",
-  "access-control-expose-headers": "x-room-store",
+  "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "access-control-allow-headers": "content-type, x-ai-key, authorization, x-canvas-name, x-base-version",
+  "access-control-expose-headers": "x-room-store, x-canvas-updated",
 };
 
 function randomId(length = 10) {
@@ -193,6 +200,272 @@ async function getRoomScene(env, id) {
  */
 function roomStoreName(env) {
   return env.ROOM_SCENES ? "r2" : "kv";
+}
+
+/* ------------------------------------------------------------------ *
+ * Cloud canvases — every canvas kept on the server, behind an email.
+ *
+ * Free for everyone; leaving an email (plus an optional newsletter opt-in)
+ * is what switches it on. Metadata and consent records live in D1 so they
+ * can be queried and exported; the drawings themselves go to R2, encrypted
+ * in the browser exactly like share links and rooms. The key never reaches
+ * this Worker: it only ever sees ciphertext, a SHA-256 of the access token,
+ * and the email the user typed.
+ *
+ * Enable with:
+ *   npx wrangler d1 create axdraw-db
+ * and paste the printed [[d1_databases]] block into wrangler.toml with
+ * binding = "DB". The tables create themselves on first use.
+ * ------------------------------------------------------------------ */
+
+const CONSENT_VERSION = "2026-10-06";
+const EMAIL_PATTERN = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,24}$/;
+
+const SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS leads (
+     email TEXT PRIMARY KEY,
+     privacy_consent_at INTEGER NOT NULL,
+     marketing_consent INTEGER NOT NULL DEFAULT 0,
+     marketing_consent_at INTEGER,
+     consent_version TEXT NOT NULL,
+     source TEXT,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`,
+  `CREATE TABLE IF NOT EXISTS workspaces (
+     id TEXT PRIMARY KEY,
+     token_hash TEXT NOT NULL,
+     email TEXT NOT NULL,
+     created_at INTEGER NOT NULL,
+     last_seen INTEGER NOT NULL
+   )`,
+  `CREATE TABLE IF NOT EXISTS canvases (
+     workspace_id TEXT NOT NULL,
+     id TEXT NOT NULL,
+     name TEXT NOT NULL,
+     size INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL,
+     PRIMARY KEY (workspace_id, id)
+   )`,
+  `CREATE INDEX IF NOT EXISTS workspaces_email ON workspaces (email)`,
+];
+
+let schemaReady = null;
+function ensureSchema(db) {
+  // Once per isolate. A failure is not cached, so the next request retries.
+  schemaReady ??= db.batch(SCHEMA.map((sql) => db.prepare(sql))).catch((error) => {
+    schemaReady = null;
+    throw error;
+  });
+  return schemaReady;
+}
+
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** Constant-time string comparison for equal-length hex digests. */
+function sameDigest(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/** Resolves `Authorization: Bearer <workspace>.<token>` to a workspace row. */
+async function authenticate(request, env) {
+  const header = request.headers.get("authorization") ?? "";
+  const match = /^Bearer ([A-Za-z0-9]{10,40})\.([A-Za-z0-9_-]{20,100})$/.exec(header);
+  if (!match) return null;
+  const row = await env.DB.prepare("SELECT id, token_hash, email FROM workspaces WHERE id = ?")
+    .bind(match[1])
+    .first();
+  if (!row) return null;
+  if (!sameDigest(row.token_hash, await sha256Hex(match[2]))) return null;
+  return row;
+}
+
+function canvasKey(workspace, id) {
+  return `canvas/${workspace}/${id}`;
+}
+
+async function putCanvasBody(env, workspace, id, body) {
+  if (env.ROOM_SCENES) return env.ROOM_SCENES.put(canvasKey(workspace, id), body);
+  return env.SCENES.put(canvasKey(workspace, id), body);
+}
+
+async function getCanvasBody(env, workspace, id) {
+  if (env.ROOM_SCENES) {
+    const object = await env.ROOM_SCENES.get(canvasKey(workspace, id));
+    return object ? object.arrayBuffer() : null;
+  }
+  return env.SCENES.get(canvasKey(workspace, id), { type: "arrayBuffer" });
+}
+
+async function deleteCanvasBody(env, workspace, id) {
+  if (env.ROOM_SCENES) return env.ROOM_SCENES.delete(canvasKey(workspace, id));
+  return env.SCENES.delete(canvasKey(workspace, id));
+}
+
+async function handleCloud(request, env, url) {
+  if (!env.DB) return json({ error: "cloud storage is not configured" }, 503);
+  await ensureSchema(env.DB);
+  const now = Date.now();
+
+  if (url.pathname === "/api/cloud/register" && request.method === "POST") {
+    const { email, privacy, marketing, token, source } = await request.json().catch(() => ({}));
+    const address = typeof email === "string" ? email.trim().toLowerCase() : "";
+    if (!EMAIL_PATTERN.test(address) || address.length > 254) return json({ error: "invalid email" }, 400);
+    // The required consent is a precondition, not a preference.
+    if (privacy !== true) return json({ error: "privacy consent is required" }, 400);
+    if (typeof token !== "string" || !/^[A-Za-z0-9_-]{20,100}$/.test(token)) {
+      return json({ error: "invalid token" }, 400);
+    }
+    const workspace = randomId(16);
+    const optIn = marketing === true ? 1 : 0;
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO leads (email, privacy_consent_at, marketing_consent, marketing_consent_at, consent_version, source, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?2, ?2)
+         ON CONFLICT(email) DO UPDATE SET
+           privacy_consent_at = ?2,
+           marketing_consent = CASE WHEN ?3 = 1 THEN 1 ELSE leads.marketing_consent END,
+           marketing_consent_at = CASE WHEN ?3 = 1 THEN ?2 ELSE leads.marketing_consent_at END,
+           consent_version = ?5,
+           updated_at = ?2`,
+      ).bind(address, now, optIn, optIn ? now : null, CONSENT_VERSION, typeof source === "string" ? source.slice(0, 40) : null),
+      env.DB.prepare(
+        "INSERT INTO workspaces (id, token_hash, email, created_at, last_seen) VALUES (?, ?, ?, ?, ?)",
+      ).bind(workspace, await sha256Hex(token), address, now, now),
+    ]);
+    return json({ workspace });
+  }
+
+  const account = await authenticate(request, env);
+  if (!account) return json({ error: "unauthorized" }, 401);
+
+  if (url.pathname === "/api/cloud/account" && request.method === "GET") {
+    const lead = await env.DB.prepare("SELECT marketing_consent FROM leads WHERE email = ?")
+      .bind(account.email)
+      .first();
+    return json({ email: account.email, marketing: lead?.marketing_consent === 1 });
+  }
+
+  // Newsletter opt-in or withdrawal — withdrawing must be as easy as opting in.
+  if (url.pathname === "/api/cloud/consent" && request.method === "POST") {
+    const { marketing } = await request.json().catch(() => ({}));
+    if (typeof marketing !== "boolean") return json({ error: "invalid consent" }, 400);
+    await env.DB.prepare(
+      "UPDATE leads SET marketing_consent = ?, marketing_consent_at = ?, updated_at = ? WHERE email = ?",
+    )
+      .bind(marketing ? 1 : 0, now, now, account.email)
+      .run();
+    return json({ ok: true });
+  }
+
+  // Deletes every canvas and the account. The lead goes too unless another
+  // workspace (another device) still uses the same address.
+  if (url.pathname === "/api/cloud/account" && request.method === "DELETE") {
+    const { results } = await env.DB.prepare("SELECT id FROM canvases WHERE workspace_id = ?")
+      .bind(account.id)
+      .all();
+    await Promise.all((results ?? []).map((row) => deleteCanvasBody(env, account.id, row.id)));
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM canvases WHERE workspace_id = ?").bind(account.id),
+      env.DB.prepare("DELETE FROM workspaces WHERE id = ?").bind(account.id),
+      env.DB.prepare(
+        "DELETE FROM leads WHERE email = ? AND NOT EXISTS (SELECT 1 FROM workspaces WHERE email = ?)",
+      ).bind(account.email, account.email),
+    ]);
+    return json({ ok: true });
+  }
+
+  if (url.pathname === "/api/cloud/canvases" && request.method === "GET") {
+    const { results } = await env.DB.prepare(
+      "SELECT id, name, size, updated_at AS updated FROM canvases WHERE workspace_id = ? ORDER BY updated_at DESC",
+    )
+      .bind(account.id)
+      .all();
+    await env.DB.prepare("UPDATE workspaces SET last_seen = ? WHERE id = ?").bind(now, account.id).run();
+    return json({ canvases: results ?? [] });
+  }
+
+  const canvas = /^\/api\/cloud\/canvases\/([A-Za-z0-9_-]{1,40})$/.exec(url.pathname);
+  if (canvas) {
+    const id = canvas[1];
+    const row = await env.DB.prepare("SELECT updated_at FROM canvases WHERE workspace_id = ? AND id = ?")
+      .bind(account.id, id)
+      .first();
+
+    if (request.method === "GET") {
+      if (!row) return json({ error: "not found" }, 404);
+      const body = await getCanvasBody(env, account.id, id);
+      if (!body) return json({ error: "not found" }, 404);
+      return new Response(body, {
+        headers: {
+          "content-type": "application/octet-stream",
+          "cache-control": "no-store",
+          "x-canvas-updated": String(row.updated_at),
+          ...CORS_HEADERS,
+        },
+      });
+    }
+
+    if (request.method === "PUT") {
+      // Optimistic concurrency: a device that has not seen the latest save
+      // must merge it first instead of writing over another device's work.
+      const base = Number(request.headers.get("x-base-version") ?? 0);
+      if (row && row.updated_at > base) return json({ error: "conflict", updated: row.updated_at }, 409);
+      const name = request.headers.get("x-canvas-name") ?? "";
+      if (!/^[A-Za-z0-9_-]{1,2000}$/.test(name)) return json({ error: "invalid name" }, 400);
+      const length = Number(request.headers.get("content-length") ?? 0);
+      if (length > MAX_BYTES) return json({ error: "too large" }, 413);
+      const body = await request.arrayBuffer();
+      if (body.byteLength === 0) return json({ error: "empty body" }, 400);
+      if (body.byteLength > MAX_BYTES) return json({ error: "too large" }, 413);
+      // Strictly increasing even within one millisecond, so a device's own
+      // previous save never looks newer than what it is building on.
+      const updated = Math.max(now, (row?.updated_at ?? 0) + 1);
+      await putCanvasBody(env, account.id, id, body);
+      await env.DB.prepare(
+        `INSERT INTO canvases (workspace_id, id, name, size, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(workspace_id, id) DO UPDATE SET name = excluded.name, size = excluded.size, updated_at = excluded.updated_at`,
+      )
+        .bind(account.id, id, name, body.byteLength, updated)
+        .run();
+      return json({ ok: true, updated });
+    }
+
+    if (request.method === "DELETE") {
+      await deleteCanvasBody(env, account.id, id);
+      await env.DB.prepare("DELETE FROM canvases WHERE workspace_id = ? AND id = ?").bind(account.id, id).run();
+      return json({ ok: true });
+    }
+  }
+
+  return json({ error: "not found" }, 404);
+}
+
+/**
+ * Share links in R2 when it is bound. A share is written once and opened
+ * straight away — usually by a room full of students the moment the link is
+ * posted. On KV a read from another region within the first minute can miss,
+ * and that miss is cached, so the link said "expired or does not exist" to
+ * some students and worked for others. R2 has no such window. Old links that
+ * were written to KV keep working through the fallback read.
+ */
+async function putShare(env, id, body) {
+  if (env.ROOM_SCENES) return env.ROOM_SCENES.put(`share/${id}`, body);
+  return env.SCENES.put(id, body);
+}
+
+async function getShare(env, id) {
+  if (env.ROOM_SCENES) {
+    const object = await env.ROOM_SCENES.get(`share/${id}`);
+    if (object) return object.arrayBuffer();
+  }
+  return env.SCENES.get(id, { type: "arrayBuffer" });
 }
 
 export default {
@@ -413,6 +686,14 @@ export default {
         return json({ reply });
       }
 
+      if (url.pathname.startsWith("/api/cloud/")) {
+        try {
+          return await handleCloud(request, env, url);
+        } catch (error) {
+          return json({ error: "cloud storage failed", detail: String(error).slice(0, 200) }, 500);
+        }
+      }
+
       const room = /^\/api\/rooms\/([A-Za-z0-9]+)\/ws$/.exec(url.pathname);
       if (room) {
         return env.ROOMS.get(env.ROOMS.idFromName(room[1])).fetch(request);
@@ -464,13 +745,13 @@ export default {
         if (body.byteLength === 0) return json({ error: "empty body" }, 400);
         if (body.byteLength > MAX_BYTES) return json({ error: "too large" }, 413);
         const id = randomId();
-        await env.SCENES.put(id, body);
+        await putShare(env, id, body);
         return json({ id });
       }
 
       const match = /^\/api\/scenes\/([A-Za-z0-9]+)$/.exec(url.pathname);
       if (match && request.method === "GET") {
-        const body = await env.SCENES.get(match[1], { type: "arrayBuffer" });
+        const body = await getShare(env, match[1]);
         if (!body) return json({ error: "not found" }, 404);
         return new Response(body, {
           headers: {

@@ -92,9 +92,9 @@ export const COMMANDS: Command[] = [
   { id: "file.svg", label: "Export as SVG", ko: "SVG로 내보내기", group: "파일", run: (a) => a.exportSvg() },
   { id: "file.copyPng", label: "Copy image to clipboard", ko: "이미지 클립보드 복사", group: "파일", run: (a) => void a.copyPngToClipboard() },
   { id: "file.copySvg", label: "Copy SVG to clipboard", ko: "SVG 클립보드 복사", group: "파일", run: (a) => void a.copySvgToClipboard() },
-  { id: "file.share", label: "Share link", ko: "공유 링크", group: "파일", run: (a) => void a.shareLink() },
-  { id: "collab.start", label: "Start live collaboration", ko: "실시간 협업 시작", group: "파일", run: (a) => void a.startCollab(), enabled: (a) => !a.collab },
-  { id: "collab.stop", label: "Stop live collaboration", ko: "실시간 협업 종료", group: "파일", run: (a) => a.stopCollab(), enabled: (a) => !!a.collab },
+  { id: "file.share", label: "Copy snapshot link (a copy, not live)", ko: "사본 링크 복사 (스냅샷 · 실시간 아님)", group: "파일", run: (a) => void a.shareLink() },
+  { id: "collab.start", label: "Draw together — copy live link", ko: "함께 그리기 — 실시간 링크 복사", group: "파일", run: (a) => void a.startCollab(), enabled: (a) => !a.collab },
+  { id: "collab.stop", label: "Stop sharing live", ko: "실시간 공유 중지", group: "파일", run: (a) => a.stopCollab(), enabled: (a) => !!a.collab },
   { id: "insert.template", label: "Insert template", ko: "템플릿 삽입", group: "파일", run: (a) => void import("./templates").then((m) => m.openTemplateDialog(a)) },
 ];
 
