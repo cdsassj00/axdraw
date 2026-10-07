@@ -492,6 +492,9 @@ try {
 
   await page.keyboard.press("t");
   await page.mouse.click(400, 320);
+  // The editor takes focus on the next frame; on a deployed site that frame
+  // can come later than a script's first keystroke.
+  await page.waitForFunction(() => document.activeElement?.classList.contains("ax-text-editor"));
   await page.keyboard.type("자료: https://cdsa.kr/edu.");
   await page.keyboard.press("Escape");
   await page.waitForTimeout(150);
