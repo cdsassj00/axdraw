@@ -5,6 +5,7 @@ import { getElementAbsoluteCoords, getElementBounds, rotate } from "../element/b
 import type { TransformHandle } from "../element/resize";
 import type { AxElement, Bounds, LinearElement, Theme } from "../types";
 import type { Viewport } from "./renderer";
+import { linkBadgeRect } from "../element/links";
 
 export interface SnapLine {
   from: { x: number; y: number };
@@ -49,6 +50,8 @@ export function renderInteractiveScene(canvas: HTMLCanvasElement, state: Interac
   ctx.setTransform(scale, 0, 0, scale, viewport.scrollX * scale, viewport.scrollY * scale);
 
   const px = 1 / viewport.zoom;
+
+  drawLinkBadges(ctx, state);
 
   // Binding target highlight.
   if (state.bindingHighlightId) {
@@ -182,6 +185,37 @@ export function renderInteractiveScene(canvas: HTMLCanvasElement, state: Interac
       ctx.lineTo(point.x, point.y);
       ctx.stroke();
     }
+    ctx.restore();
+  }
+}
+
+/**
+ * The ↗ badge on every linked element — always shown, not only on
+ * selection, because the point of a link on a whiteboard is one click.
+ */
+function drawLinkBadges(ctx: CanvasRenderingContext2D, state: InteractiveState): void {
+  const { zoom } = state.viewport;
+  for (const element of state.elements) {
+    if (element.isDeleted || !element.link) continue;
+    const { x, y, size } = linkBadgeRect(element, zoom);
+    ctx.save();
+    ctx.fillStyle = ACCENT;
+    ctx.beginPath();
+    ctx.roundRect(x, y, size, size, size / 4);
+    ctx.fill();
+    // An arrow leaving a box: "opens elsewhere".
+    const s = size;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = s / 11;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(x + s * 0.32, y + s * 0.68);
+    ctx.lineTo(x + s * 0.7, y + s * 0.3);
+    ctx.moveTo(x + s * 0.42, y + s * 0.3);
+    ctx.lineTo(x + s * 0.7, y + s * 0.3);
+    ctx.lineTo(x + s * 0.7, y + s * 0.58);
+    ctx.stroke();
     ctx.restore();
   }
 }

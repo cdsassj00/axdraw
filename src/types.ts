@@ -63,6 +63,8 @@ export interface BaseElement {
   locked: boolean;
   isDeleted: boolean;
   link: string | null;
+  /** The link was picked up from the element's own text, not set by hand. */
+  linkAuto?: boolean;
   updated: number;
 }
 
