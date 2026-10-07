@@ -146,6 +146,7 @@ import { CollabSession, ROOM_HASH_PATTERN } from "./scene/collab";
 import { CloudSync, type CloudHost } from "./scene/cloudSync";
 import { adoptCloudFromHash, registerCloud } from "./scene/cloud";
 import { mergeElements } from "./scene/merge";
+import { findLinkInText, getLinkBadgeAt, normalizeLink, openLink } from "./element/links";
 import { renameRecentRoom, roomBoardId, setRoomBoard } from "./scene/recentRooms";
 import { t } from "./i18n";
 import type {
@@ -655,6 +656,8 @@ export class App implements CloudHost {
       this.textEditor.commit();
     }
 
+    if (event.button === 0 && this.followLinkAt(scene, event)) return;
+
     // Panning: middle mouse, space, or the hand tool.
     if (event.button === 1 || this.spacePressed || this.state.tool === "hand") {
       this.pointerMode = { type: "pan", lastX: event.clientX, lastY: event.clientY };
@@ -961,6 +964,7 @@ export class App implements CloudHost {
     } else if (this.state.tool === "text" && !this.state.toolLocked) {
       this.setTool("selection");
     }
+    if (!isEmpty) this.autoLink(element);
     this.commit();
   }
 
@@ -1091,8 +1095,57 @@ export class App implements CloudHost {
       }
       this.cursorOverride = null;
     }
+    // A linked element's badge is a button: say so, and show where it goes.
+    const linked = getLinkBadgeAt(this.elements, scene, this.state.zoom);
+    if (linked) this.cursorOverride = "pointer";
+    const title = linked?.link ?? "";
+    if (this.container.title !== title) this.container.title = title;
     this.updateCursor();
   };
+
+  /**
+   * Opens a link if this press is meant to: on a badge, with Ctrl/Cmd on a
+   * linked element, or anywhere on one in view mode (where nothing can be
+   * edited, so a click has nothing else to mean).
+   */
+  private followLinkAt(scene: Point, event: PointerEvent): boolean {
+    let target = getLinkBadgeAt(this.elements, scene, this.state.zoom);
+    if (!target && (event.ctrlKey || event.metaKey || this.state.viewMode)) {
+      const hit = getElementAtPosition(this.elements, scene, HIT_THRESHOLD / this.state.zoom);
+      if (hit?.link) target = hit;
+    }
+    if (!target?.link) return false;
+    this.activePointers.delete(event.pointerId);
+    if (this.interactiveCanvas.hasPointerCapture(event.pointerId)) {
+      this.interactiveCanvas.releasePointerCapture(event.pointerId);
+    }
+    openLink(target.link);
+    return true;
+  }
+
+  /** Sets (or with an empty string, removes) the link on the selection. */
+  setLinkOnSelection(raw: string): void {
+    const selected = this.getSelectedElements();
+    if (!selected.length) return;
+    const link = raw.trim() ? normalizeLink(raw) : null;
+    if (raw.trim() && !link) {
+      this.onError?.(t("That is not a web address"));
+      return;
+    }
+    for (const element of selected) mutateElement(element, { link, linkAuto: false });
+    this.commit();
+  }
+
+  /**
+   * Text that contains a web address links to it. Only a link the text
+   * itself supplied is kept in step with the text; one set by hand stays.
+   */
+  private autoLink(element: AxElement): void {
+    if (element.type !== "text") return;
+    if (element.link && !element.linkAuto) return;
+    const found = findLinkInText(element.text);
+    if (found !== element.link) mutateElement(element, { link: found, linkAuto: Boolean(found) });
+  }
 
   private updateResizeCursor(scene: Point): void {
     const selected = this.getSelectedElements();
@@ -2246,6 +2299,7 @@ export class App implements CloudHost {
       width: metrics.width,
       height: metrics.height,
     });
+    this.autoLink(element);
     this.elements = [...this.elements, element];
     this.state.selectedIds = new Set([element.id]);
     this.commit();

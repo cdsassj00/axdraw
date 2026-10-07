@@ -40,13 +40,15 @@ bucket_name = "axdraw-rooms"
 
 # Cloud canvases (email-gated, free): canvas list, consent records and leads
 # live in D1; the encrypted drawings go to the R2 bucket above. Until this
-# block is filled in, the app keeps working and the cloud button says the
-# server has not switched it on yet. One-time setup:
+# block existed, the app kept working and the cloud button said the server
+# had not switched it on yet. One-time setup (done 2026-10-07):
 #
 #   npx wrangler d1 create axdraw-db
 #
-# then uncomment and paste the printed database_id. Tables create themselves.
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "axdraw-db"
-# database_id = "PASTE-ID-HERE"
+# then paste the printed database_id below. Tables create themselves. The
+# binding must be named DB — that is what worker/index.js reads — whatever
+# name wrangler's own snippet suggests.
+[[d1_databases]]
+binding = "DB"
+database_name = "axdraw-db"
+database_id = "ccb7b1b0-7b49-43a0-95b9-abf6fde00d8f"

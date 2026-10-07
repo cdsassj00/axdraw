@@ -22,7 +22,11 @@ import { chromium } from "playwright";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const PORT = Number(process.env.PORT ?? 8797);
-const BASE = `http://localhost:${PORT}`;
+// BASE_URL runs everything against a deployed site instead of wrangler dev.
+// Cloud checks that need the database then only confirm the app copes with
+// cloud storage not being switched on, unless CLOUD=1 says it is.
+const LIVE = process.env.BASE_URL ?? null;
+const BASE = LIVE ?? `http://localhost:${PORT}`;
 const WRANGLER = (process.env.WRANGLER ?? "npx --yes wrangler@4").split(" ");
 
 let passed = 0;
@@ -64,11 +68,13 @@ database_id = "00000000-0000-0000-0000-000000000000"
 );
 const state = join(work, "state");
 
-const server = spawn(
-  WRANGLER[0],
-  [...WRANGLER.slice(1), "dev", "-c", config, "--port", String(PORT), "--persist-to", state],
-  { cwd: work, stdio: "ignore", detached: true },
-);
+const server = LIVE
+  ? null
+  : spawn(
+      WRANGLER[0],
+      [...WRANGLER.slice(1), "dev", "-c", config, "--port", String(PORT), "--persist-to", state],
+      { cwd: work, stdio: "ignore", detached: true },
+    );
 
 /** Runs SQL against the local D1 the Worker is using. */
 function sql(command) {
@@ -98,7 +104,9 @@ try {
   await waitForServer();
   browser = await chromium.launch({
     ...(process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {}),
-    args: ["--no-sandbox"],
+    ...(LIVE && process.env.HTTPS_PROXY ? { proxy: { server: process.env.HTTPS_PROXY } } : {}),
+    // CHROMIUM_ARGS: extra flags, e.g. trusting a proxy's CA by its key.
+    args: ["--no-sandbox", ...(process.env.CHROMIUM_ARGS ?? "").split(" ").filter(Boolean)],
   });
 
   const errors = [];
@@ -189,6 +197,10 @@ try {
 
   /* -------------------------------------------------- live rooms -- */
 
+  // SKIP_ROOMS: for networks that cannot carry WebSockets (some egress proxies).
+  if (process.env.SKIP_ROOMS) console.log("  --  live rooms skipped (SKIP_ROOMS)");
+  else {
+
   await tPage.click(".share-btn");
   await tPage.click(".share-live-start");
   await tPage.waitForFunction(() => window.__copied.some((text) => text.includes("#room=")));
@@ -273,14 +285,56 @@ try {
     (await sPage.evaluate(() => window.axdraw.collab?.url)) === otherRoom,
   );
 
+  }
+
   /* -------------------------------------------------- cloud -- */
+
+  if (LIVE && process.env.CLOUD !== "1") {
+    const visitor = await profile("visitor");
+    const vPage = await visitor.open();
+    await rect(vPage, [300, 300], [420, 380]);
+    check("the cloud chip offers cloud saving", (await vPage.getAttribute(".cloud-chip", "data-state")) === "off");
+    await vPage.click(".cloud-chip");
+    await vPage.fill(".cloud-email", "e2e-check@example.com");
+    await vPage.check(".consent-privacy");
+    await vPage.click(".cloud-submit");
+    await vPage.waitForFunction(() => (document.querySelector(".cloud-error")?.textContent ?? "").length > 0, null, { timeout: 15000 });
+    check(
+      "before the database exists, signing up says so plainly",
+      /not switched on/.test((await vPage.textContent(".cloud-error")) ?? ""),
+      await vPage.textContent(".cloud-error"),
+    );
+    check("and leaves nothing half-registered", await vPage.evaluate(() => !localStorage.getItem("axdraw:cloud")));
+    check("the drawing is untouched", (await live(vPage)).length === 1);
+    check("no page errors", errors.length === 0, errors.join(" | "));
+    throw "done";
+  }
+
+  // What the server holds, read back through the API with the browser's own
+  // credentials — works against a deployed site, where the database cannot
+  // be queried directly.
+  const cloudApi = (page, path, account) =>
+    page.evaluate(
+      async ({ path, account }) => {
+        const acct = account ?? JSON.parse(localStorage.getItem("axdraw:cloud"));
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`axdraw-cloud-auth:${acct.secret}`));
+        let binary = "";
+        for (const byte of new Uint8Array(digest)) binary += String.fromCharCode(byte);
+        const token = btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+        const response = await fetch(path, { headers: { authorization: `Bearer ${acct.workspace}.${token}` } });
+        return { status: response.status, body: await response.json().catch(() => null), account: acct };
+      },
+      { path, account },
+    );
+  // A throwaway address on a live site; the run deletes it again at the end.
+  const testEmail = LIVE ? `e2e-check+${Date.now()}@example.com` : "teacher@example.com";
 
   const laptop = await profile("laptop");
   const lPage = await laptop.open();
   await rect(lPage, [300, 300], [420, 380]);
   check("the cloud chip starts in 'only in this browser'", (await lPage.getAttribute(".cloud-chip", "data-state")) === "off");
   await lPage.click(".cloud-chip");
-  await lPage.fill(".cloud-email", "Teacher@Example.com");
+  await lPage.fill(".cloud-email", LIVE ? testEmail : "Teacher@Example.com");
   await lPage.click(".cloud-submit");
   check(
     "the required consent cannot be skipped",
@@ -292,17 +346,28 @@ try {
   await lPage.click(".cloud-submit");
   await lPage.waitForFunction(() => document.querySelector(".cloud-chip")?.dataset.state === "saved", null, { timeout: 15000 });
   check("signing up switches cloud saving on", true);
-  let lead = sql("SELECT email, marketing_consent, consent_version FROM leads");
-  check(
-    "the email and both consents are recorded",
-    lead.length === 1 && lead[0].email === "teacher@example.com" && lead[0].marketing_consent === 1,
-    JSON.stringify(lead),
-  );
+  if (LIVE) {
+    const account = await cloudApi(lPage, "/api/cloud/account");
+    check(
+      "the email and both consents are recorded",
+      account.status === 200 && account.body.email === testEmail && account.body.marketing === true,
+      JSON.stringify(account.body),
+    );
+  } else {
+    const lead = sql("SELECT email, marketing_consent, consent_version FROM leads");
+    check(
+      "the email and both consents are recorded",
+      lead.length === 1 && lead[0].email === "teacher@example.com" && lead[0].marketing_consent === 1,
+      JSON.stringify(lead),
+    );
+  }
 
   await lPage.evaluate(() => window.axdraw.newBoard());
   await rect(lPage, [500, 400], [620, 480]);
   await lPage.waitForTimeout(3500);
-  const stored = sql("SELECT id, name, size FROM canvases");
+  const stored = LIVE
+    ? (await cloudApi(lPage, "/api/cloud/canvases")).body.canvases
+    : sql("SELECT id, name, size FROM canvases");
   check("every canvas is saved to the cloud", stored.length === 2, `${stored.length} canvases`);
   check("canvas names reach the server encrypted", stored.every((row) => !/캔버스/.test(row.name)), stored.map((r) => r.name.slice(0, 12)).join(","));
 
@@ -346,28 +411,42 @@ try {
   await lPage.waitForFunction(() => !document.querySelector(".consent-marketing")?.disabled);
   await lPage.uncheck(".consent-marketing");
   await lPage.waitForTimeout(800);
-  lead = sql("SELECT marketing_consent FROM leads");
-  check("the newsletter consent can be withdrawn", lead[0]?.marketing_consent === 0, JSON.stringify(lead));
+  if (LIVE) {
+    const account = await cloudApi(lPage, "/api/cloud/account");
+    check("the newsletter consent can be withdrawn", account.body?.marketing === false, JSON.stringify(account.body));
+  } else {
+    const lead = sql("SELECT marketing_consent FROM leads");
+    check("the newsletter consent can be withdrawn", lead[0]?.marketing_consent === 0, JSON.stringify(lead));
+  }
+  const credentials = (await cloudApi(lPage, "/api/cloud/canvases")).account;
 
   lPage.once("dialog", (dialog) => void dialog.accept());
   await lPage.click(".danger-btn");
   await lPage.waitForTimeout(1500);
-  const left = sql("SELECT (SELECT count(*) FROM leads) AS leads, (SELECT count(*) FROM workspaces) AS workspaces, (SELECT count(*) FROM canvases) AS canvases");
-  check(
-    "deleting cloud data removes the email and every canvas",
-    left[0].leads === 0 && left[0].workspaces === 0 && left[0].canvases === 0,
-    JSON.stringify(left[0]),
-  );
+  if (LIVE) {
+    // The account is gone, so its old credentials no longer open anything.
+    const after = await cloudApi(lPage, "/api/cloud/canvases", credentials);
+    check("deleting cloud data removes the email and every canvas", after.status === 401, `status ${after.status}`);
+  } else {
+    const left = sql("SELECT (SELECT count(*) FROM leads) AS leads, (SELECT count(*) FROM workspaces) AS workspaces, (SELECT count(*) FROM canvases) AS canvases");
+    check(
+      "deleting cloud data removes the email and every canvas",
+      left[0].leads === 0 && left[0].workspaces === 0 && left[0].canvases === 0,
+      JSON.stringify(left[0]),
+    );
+  }
   check("and this browser keeps its own copies", (await boards(lPage)).length >= 2);
 
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (error) {
-  failed++;
-  console.error(error);
+  if (error !== "done") {
+    failed++;
+    console.error(error);
+  }
 } finally {
   await browser?.close();
   try {
-    process.kill(-server.pid);
+    if (server) process.kill(-server.pid);
   } catch {
     // Already gone.
   }

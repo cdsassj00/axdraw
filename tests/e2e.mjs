@@ -11,7 +11,8 @@ import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 
 const PORT = Number(process.env.PORT ?? 4173);
-const BASE = `http://localhost:${PORT}`;
+// BASE_URL runs the suite against a deployed site instead of a local preview.
+const BASE = process.env.BASE_URL ?? `http://localhost:${PORT}`;
 const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR ?? null;
 
 let passed = 0;
@@ -37,10 +38,12 @@ async function waitForServer(url, timeoutMs = 30000) {
   throw new Error(`Preview server did not start on ${url}`);
 }
 
-const server = spawn("npx", ["vite", "preview", "--port", String(PORT)], {
-  stdio: "ignore",
-  detached: true,
-});
+const server = process.env.BASE_URL
+  ? null
+  : spawn("npx", ["vite", "preview", "--port", String(PORT)], {
+      stdio: "ignore",
+      detached: true,
+    });
 
 let browser;
 try {
@@ -48,7 +51,10 @@ try {
 
   browser = await chromium.launch({
     ...(process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {}),
-    args: ["--no-sandbox"],
+    // A deployed site may only be reachable through the environment's proxy.
+    ...(process.env.BASE_URL && process.env.HTTPS_PROXY ? { proxy: { server: process.env.HTTPS_PROXY } } : {}),
+    // CHROMIUM_ARGS: extra flags, e.g. trusting a proxy's CA by its key.
+    args: ["--no-sandbox", ...(process.env.CHROMIUM_ARGS ?? "").split(" ").filter(Boolean)],
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
 
@@ -464,6 +470,77 @@ try {
     JSON.stringify({ ...afterDouble, settled }),
   );
 
+  /* ---------------- links ---------------- */
+
+  await resetView();
+  await page.evaluate(() => {
+    window.__opened = [];
+    window.open = (url) => {
+      window.__opened.push(String(url));
+      return null;
+    };
+  });
+  const opened = () => page.evaluate(() => window.__opened.slice());
+  /** Screen centre of an element's link badge (zoom 1, no scroll after resetView). */
+  const badgeAt = (id) =>
+    page.evaluate((elementId) => {
+      const element = window.axdraw.elements.find((e) => e.id === elementId);
+      const { zoom, scrollX, scrollY } = window.axdraw.state;
+      const x2 = element.x + element.width;
+      return [(x2 + 10 / zoom + 11 / zoom + scrollX) * zoom, (element.y - 10 / zoom - 11 / zoom + scrollY) * zoom];
+    }, id);
+
+  await page.keyboard.press("t");
+  await page.mouse.click(400, 320);
+  await page.keyboard.type("자료: https://cdsa.kr/edu.");
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+  const linkedText = await page.evaluate(() => {
+    const element = window.axdraw.elements.filter((e) => e.type === "text" && !e.isDeleted).pop();
+    return { id: element.id, link: element.link, x: element.x, y: element.y, w: element.width, h: element.height };
+  });
+  check("typing an address makes the text a link", linkedText.link === "https://cdsa.kr/edu", linkedText.link);
+
+  await page.keyboard.press("v");
+  await page.mouse.click(linkedText.x + 20, linkedText.y + linkedText.h / 2);
+  check("clicking the text itself only selects it", (await opened()).length === 0, JSON.stringify(await opened()));
+
+  const [bx, by] = await badgeAt(linkedText.id);
+  await page.mouse.move(bx, by);
+  check(
+    "the badge shows a pointer and the address",
+    (await page.evaluate(() => [window.axdraw.container.style.cursor, window.axdraw.container.title])).join(" ") ===
+      "pointer https://cdsa.kr/edu",
+  );
+  await page.mouse.click(bx, by);
+  check("one click on the badge opens the link", (await opened())[0] === "https://cdsa.kr/edu", JSON.stringify(await opened()));
+  check("and moves nothing", await page.evaluate((t) => {
+    const e = window.axdraw.elements.find((x) => x.id === t.id);
+    return e.x === t.x && e.y === t.y;
+  }, linkedText));
+
+  await page.keyboard.down("Control");
+  await page.mouse.click(linkedText.x + 20, linkedText.y + linkedText.h / 2);
+  await page.keyboard.up("Control");
+  check("Ctrl+click on a linked element opens it", (await opened()).length === 2, JSON.stringify(await opened()));
+
+  // A shape linked by hand, as the right-click "Link…" item does.
+  await page.keyboard.press("r");
+  await drag([600, 300], [720, 380]);
+  await page.evaluate(() => window.axdraw.setLinkOnSelection("cdsa.kr"));
+  const shapeLink = await page.evaluate(() => window.axdraw.getSelectedElements()[0].link);
+  check("a bare domain set by hand becomes a web link", shapeLink === "https://cdsa.kr/", shapeLink);
+  await page.evaluate(() => window.axdraw.setLinkOnSelection("javascript:alert(1)"));
+  check(
+    "a javascript: link is refused",
+    (await page.evaluate(() => window.axdraw.getSelectedElements()[0].link)) === "https://cdsa.kr/",
+  );
+  await page.evaluate(() => window.axdraw["pasteText"]("수업 자료 www.cdsa.kr 참고"));
+  check(
+    "pasted text with an address links to it",
+    (await page.evaluate(() => window.axdraw.getSelectedElements()[0].link)) === "https://www.cdsa.kr/",
+  );
+
   /* ---------------- canvas naming ---------------- */
 
   const nameField = ".board-name-input";
@@ -506,6 +583,44 @@ try {
     (await page.evaluate(() => window.axdraw.currentBoardName())) === "강의 1주차",
     await page.evaluate(() => window.axdraw.currentBoardName()),
   );
+  await page.evaluate(
+    (name) => window.axdraw.renameBoard(window.axdraw.currentBoardId(), name),
+    originalName,
+  );
+
+  // "New canvas" while the name box still holds a half-typed name. Safari and
+  // iPad do not move focus when a menu button is clicked, so the box stays
+  // focused through the switch — calling newBoard() directly reproduces that
+  // in Chromium, which would otherwise blur the box on the click.
+  const before = await page.evaluate(() => window.axdraw.currentBoardId());
+  await page.click(nameField);
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("과학 2교시");
+  await page.evaluate(() => window.axdraw.newBoard());
+  await page.waitForTimeout(120);
+  const fieldAfterNew = await page.$eval(nameField, (node) => node.value);
+  const newName = await page.evaluate(() => window.axdraw.currentBoardName());
+  check("a new canvas shows its own name, not the one being typed", fieldAfterNew === newName && newName !== "과학 2교시", `${fieldAfterNew} / ${newName}`);
+  await page.mouse.click(700, 500); // the box loses focus at last
+  await page.waitForTimeout(120);
+  const names = await page.evaluate(
+    (id) => ({
+      typedFor: window.axdraw.listBoards().find((b) => b.id === id).name,
+      current: window.axdraw.currentBoardName(),
+    }),
+    before,
+  );
+  check(
+    "the typed name lands on the canvas it was typed for",
+    names.typedFor === "과학 2교시" && names.current !== "과학 2교시",
+    JSON.stringify(names),
+  );
+  await page.evaluate((id) => {
+    const app = window.axdraw;
+    const extra = app.currentBoardId();
+    app.openBoard(id);
+    app.deleteBoard(extra);
+  }, before);
   await page.evaluate(
     (name) => window.axdraw.renameBoard(window.axdraw.currentBoardId(), name),
     originalName,
@@ -1723,7 +1838,7 @@ try {
 } finally {
   await browser?.close();
   try {
-    process.kill(-server.pid);
+    if (server) process.kill(-server.pid);
   } catch {
     // Already gone.
   }

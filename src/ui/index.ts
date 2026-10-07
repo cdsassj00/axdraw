@@ -227,7 +227,7 @@ export function createUI(app: App): void {
 
     // The board can change under us: a new canvas, a switch, a shared scene
     // loading. Refresh the field unless the user is in the middle of typing.
-    if (document.activeElement !== boardName) boardName.value = app.currentBoardName();
+    syncBoardName();
     const cloud = cloudChipLabel(app);
     cloudChip.textContent = cloud.text;
     cloudChip.title = cloud.title;
@@ -970,6 +970,16 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
  * restores. This element is created once and deliberately left out of the
  * chrome rebuild, so an edit in progress survives whatever else changes.
  */
+let syncBoardName: () => void = () => undefined;
+
+/** Asks for the selection's link; an empty answer removes it. */
+function promptLink(app: App): void {
+  const current = app.getSelectedElements().find((element) => element.link)?.link ?? "";
+  const answer = window.prompt(t("Link address (leave empty to remove)"), current);
+  if (answer === null) return;
+  app.setLinkOnSelection(answer);
+}
+
 function boardNameField(app: App): HTMLInputElement {
   const input = h("input", {
     class: "board-name-input",
@@ -980,11 +990,38 @@ function boardNameField(app: App): HTMLInputElement {
     spellcheck: "false",
   }) as HTMLInputElement;
 
+  // The canvas being renamed is the one open when typing began, not whatever
+  // is open when the edit ends. Safari and iPad do not move focus when a menu
+  // button is clicked, so "New canvas" could run while this box still held the
+  // half-typed name: the name then landed on the new canvas when the box
+  // finally lost focus, and the canvas it was typed for kept its old name.
+  let editing: string | null = null;
+  input.addEventListener("focus", () => {
+    editing = app.currentBoardId();
+  });
+
   const commit = () => {
+    const target = editing ?? app.currentBoardId();
+    editing = null;
+    app.renameBoard(target, input.value);
     // renameBoard refuses a blank name; mirror its decision back into the box
     // so a cleared field does not sit there looking like it saved.
-    app.renameBoard(app.currentBoardId(), input.value);
     input.value = app.currentBoardName();
+  };
+
+  /**
+   * Called on every UI refresh. A different canvas opening mid-edit finishes
+   * the edit on the canvas it belongs to, then shows the new canvas's name.
+   */
+  syncBoardName = () => {
+    if (document.activeElement !== input) {
+      input.value = app.currentBoardName();
+      return;
+    }
+    if (editing && editing !== app.currentBoardId()) {
+      commit();
+      input.blur();
+    }
   };
 
   input.addEventListener("keydown", (event) => {
@@ -1343,6 +1380,7 @@ function openContextMenu(
       menuItem("copy", "Copy as PNG", null, run(() => void app.copyPngToClipboard())),
       menuItem("copy", "Copy as SVG", null, run(() => void app.copySvgToClipboard())),
       menuItem("template", "Move to canvas…", null, run(() => openMoveToBoardDialog(app))),
+      menuItem("link", "Link…", null, run(() => promptLink(app))),
       h("div", { class: "dropdown-separator" }),
       menuItem("bringToFront", "Bring to front", "Ctrl+Shift+]", run(() => app.changeZ("front"))),
       menuItem("bringForward", "Bring forward", "Ctrl+]", run(() => app.changeZ("forward"))),
