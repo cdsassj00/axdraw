@@ -1835,6 +1835,34 @@ try {
 
   if (SCREENSHOT_DIR) await page.screenshot({ path: `${SCREENSHOT_DIR}/final.png` });
 
+  /* ---------------- phone layout ---------------- */
+
+  // The phone layout once stacked zoom and undo on top of the top row:
+  // the canvas name, the cloud button and Share were all covered, and on a
+  // 320px screen even the menu was. Every top control must be tappable.
+  for (const width of [390, 320]) {
+    const phone = await browser.newContext({ viewport: { width, height: 700 }, isMobile: true, hasTouch: true });
+    const mobile = await phone.newPage();
+    await mobile.goto(BASE, { waitUntil: "networkidle" });
+    const covered = await mobile.evaluate(() => {
+      const out = [];
+      for (const selector of [".top-left .btn", ".board-name-input", ".cloud-chip", ".share-btn", ".zoom-value"]) {
+        const element = document.querySelector(selector);
+        const rect = element?.getBoundingClientRect();
+        const hit = rect && document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        if (!element || !rect.width || !element.contains(hit)) out.push(selector);
+      }
+      return out;
+    });
+    check(`on a ${width}px phone every top control can be tapped`, covered.length === 0, covered.join(", "));
+    await mobile.tap(".cloud-chip");
+    check(
+      `on a ${width}px phone the cloud button opens sign-up`,
+      await mobile.locator(".cloud-email").isVisible(),
+    );
+    await phone.close();
+  }
+
   check("no console or page errors", errors.length === 0, errors.join(" | "));
 
   console.log(`\n${passed} passed, ${failed} failed`);

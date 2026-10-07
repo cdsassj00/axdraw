@@ -229,7 +229,14 @@ export function createUI(app: App): void {
     // loading. Refresh the field unless the user is in the middle of typing.
     syncBoardName();
     const cloud = cloudChipLabel(app);
-    cloudChip.textContent = cloud.text;
+    // Icon and words apart, so a phone can keep the icon when the words
+    // do not fit — the button must never vanish: on a phone, losing the
+    // drawing to a cleared browser is the likeliest of all.
+    cloudChip.replaceChildren(
+      h("span", { class: "cloud-chip-icon", text: "☁" }),
+      h("span", { class: "cloud-chip-label", text: cloud.text.replace(/^☁\s*/, "") }),
+    );
+    cloudChip.setAttribute("aria-label", cloud.text);
     cloudChip.title = cloud.title;
     cloudChip.dataset.state = cloud.state;
 
@@ -246,13 +253,21 @@ export function createUI(app: App): void {
             }),
           ]
         : []),
-      h("button", {
-        class: `primary-btn share-btn${app.collab ? " is-live" : ""}`,
-        type: "button",
-        text: app.collab ? t("● Live") : t("Share"),
-        title: app.collab ? t("This canvas is shared live — click for the link") : t("Share this canvas"),
-        onclick: () => openShareDialog(app),
-      }),
+      h(
+        "button",
+        {
+          class: `primary-btn share-btn${app.collab ? " is-live" : ""}`,
+          type: "button",
+          title: app.collab ? t("This canvas is shared live — click for the link") : t("Share this canvas"),
+          onclick: () => openShareDialog(app),
+        },
+        app.collab
+          ? [
+              h("span", { class: "share-long", text: t("● Live collaboration") }),
+              h("span", { class: "share-short", text: t("● Live") }),
+            ]
+          : [t("Share")],
+      ),
       h("div", { class: "island", style: { display: "flex", gap: "2px", padding: "6px" } }, [
         button({
           icon: iconEl("wand"),

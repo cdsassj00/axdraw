@@ -1566,6 +1566,63 @@ input[type="range"] {
 }
 .board-badge.is-live { background: #2f9e44; color: #fff; }
 
+.cloud-chip-icon { margin-right: 4px; }
+
 @media (max-width: 640px) {
-  .cloud-chip { display: none; }
+  .cloud-chip { margin-left: 2px; padding: 4px 8px; font-size: 15px; }
+  .cloud-chip-icon { margin-right: 0; }
+  .cloud-chip-label { display: none; }
+}
+
+/* ---------------------------------------------------------------- *
+ * Phones
+ *
+ * The desktop layout pins zoom and undo along the bottom-left; the phone
+ * block above moved them to the top, where they landed on top of the
+ * canvas name, the cloud button and Share — all three were covered and
+ * could not be tapped. And the top-left row keeps clear of the centre
+ * banner with max-width: 50vw - 250px, which is negative on a phone and
+ * crushed it. The banner is hidden on phones anyway, so here:
+ *   row 1  — menu · canvas name · ☁            ☕ · Share
+ *   row 2  — templates · AI · chat (icons)
+ *   bottom — zoom · undo/redo, just above the tool bar
+ * Shape assist, grid, theme and help are all in the menu.
+ * ---------------------------------------------------------------- */
+@media (max-width: 730px) {
+  .top-left {
+    top: 8px;
+    left: 8px;
+    max-width: calc(100vw - 150px);
+  }
+  .top-right {
+    top: 8px;
+    right: 8px;
+  }
+  /* !important: the island is built with an inline display: flex. */
+  .top-right > .island {
+    display: none !important;
+  }
+  .top-left .btn--wide {
+    font-size: 0;
+    gap: 0;
+  }
+  .bottom-left {
+    top: auto;
+    bottom: 76px;
+    left: 8px;
+    right: 8px;
+    justify-content: space-between;
+  }
+  .panel {
+    bottom: 128px;
+  }
+  .share-btn .share-long {
+    display: none;
+  }
+}
+
+@media (min-width: 731px) {
+  .share-btn .share-short {
+    display: none;
+  }
 }
