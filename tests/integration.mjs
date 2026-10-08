@@ -285,6 +285,73 @@ try {
     (await sPage.evaluate(() => window.axdraw.collab?.url)) === otherRoom,
   );
 
+  // A room in one tab, a new canvas in another tab of the same browser. The
+  // open canvas used to be one value shared by all tabs: the room tab then
+  // saved the room's drawing into the other tab's new canvas.
+  const pupil = await profile("pupil");
+  const roomTab = await pupil.open(otherRoom);
+  await roomTab.waitForFunction(() => Boolean(window.axdraw.collab), null, { timeout: 10000 });
+  const roomBoard = await roomTab.evaluate(() => window.axdraw.currentBoardId());
+  const roomName = await roomTab.evaluate(() => window.axdraw.currentBoardName());
+  const plainTab = await pupil.open();
+  await plainTab.evaluate(() => window.axdraw.newBoard());
+  const plainBoard = await plainTab.evaluate(() => window.axdraw.currentBoardId());
+  await rect(oPage, [300, 300], [420, 380]); // someone draws in the room
+  await roomTab.waitForFunction(() => window.axdraw.elements.some((e) => !e.isDeleted), null, { timeout: 10000 });
+  await roomTab.waitForTimeout(800);
+  const placed = await roomTab.evaluate(
+    ([room, plain]) => {
+      const live = (id) => JSON.parse(localStorage.getItem(`axdraw:scene:${id}`) || '{"elements":[]}').elements.filter((e) => !e.isDeleted).length;
+      return {
+        room: live(room),
+        plain: live(plain),
+        field: document.querySelector(".board-name-input").value,
+        inRoom: window.axdraw.elements.filter((e) => !e.isDeleted).map((e) => `${e.type}@${Math.round(e.x)},${Math.round(e.y)}`),
+      };
+    },
+    [roomBoard, plainBoard],
+  );
+  check(
+    "a room's drawing stays in the room's canvas when another tab opens a new one",
+    placed.room === 1 && placed.plain === 0 && placed.field === roomName,
+    JSON.stringify(placed),
+  );
+  await roomTab.reload({ waitUntil: "networkidle" });
+  await roomTab.waitForTimeout(1000);
+  check(
+    "and the room tab reloading does not rename the other tab's canvas",
+    (await plainTab.$eval(".board-name-input", (node) => node.value)) !== roomName,
+    await plainTab.$eval(".board-name-input", (node) => node.value),
+  );
+
+
+  // Leaving a room before its saved drawing has arrived — a slow phone, or a
+  // quick "New canvas" right after opening the link. The download used to
+  // finish anyway and pour the room's drawing into whatever canvas was open
+  // by then, and broadcast it into that canvas's room.
+  const hopper = await profile("hopper");
+  const hopPage = await hopper.open();
+  await hopPage.route(`**/api/rooms/${roomId}/scene`, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    await route.continue();
+  });
+  await hopPage.evaluate((url) => (location.hash = new URL(url).hash), roomUrl);
+  await hopPage.waitForFunction((id) => window.axdraw.collab?.id === id, roomId, { timeout: 10000 });
+  await hopPage.evaluate(() => window.axdraw.newBoard());
+  const fresh = await hopPage.evaluate(() => window.axdraw.currentBoardId());
+  await hopPage.waitForTimeout(4000);
+  const leaked = await hopPage.evaluate(
+    (id) => ({
+      onScreen: window.axdraw.elements.filter((e) => !e.isDeleted).length,
+      stored: JSON.parse(localStorage.getItem(`axdraw:scene:${id}`) || '{"elements":[]}').elements.filter((e) => !e.isDeleted).length,
+    }),
+    fresh,
+  );
+  check(
+    "a room left before its drawing arrives does not pour it into the next canvas",
+    leaked.onScreen === 0 && leaked.stored === 0,
+    JSON.stringify(leaked),
+  );
   }
 
   /* -------------------------------------------------- cloud -- */

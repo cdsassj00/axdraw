@@ -88,6 +88,31 @@ export function listBoards(): BoardMeta[] {
   return readIndex().sort((a, b) => b.updated - a.updated);
 }
 
+/**
+ * Which canvas this tab has open.
+ *
+ * This used to live in localStorage alone, which every tab shares, while each
+ * tab keeps its own drawing in memory. With a room open in one tab, pressing
+ * "New canvas" in another switched the shared pointer: the room tab then saved
+ * the room's drawing into the new canvas and left the room's canvas empty, and
+ * when the room tab later switched back the other tab showed the room's name
+ * over its own blank canvas. Each tab now holds its own pointer (kept in
+ * sessionStorage, which is per tab and survives a reload); localStorage only
+ * remembers the last canvas used, which is where a newly opened tab starts.
+ */
+const TAB_BOARD_KEY = "axdraw:board-tab";
+let tabBoard: string | null = null;
+
+function remember(id: string): void {
+  tabBoard = id;
+  try {
+    sessionStorage.setItem(TAB_BOARD_KEY, id);
+    localStorage.setItem(CURRENT_BOARD_KEY, id);
+  } catch {
+    // Storage unavailable — the in-memory pointer still works for this tab.
+  }
+}
+
 /** The active board id, migrating the legacy single scene on first call. */
 export function currentBoardId(): string {
   let boards = readIndex();
@@ -101,29 +126,33 @@ export function currentBoardId(): string {
         localStorage.setItem(sceneKey(id), legacy);
         localStorage.removeItem(STORAGE_KEY);
       }
-      localStorage.setItem(CURRENT_BOARD_KEY, id);
     } catch {
       // Storage unavailable — stay in memory.
     }
+    remember(id);
     return id;
   }
-  const stored = localStorage.getItem(CURRENT_BOARD_KEY);
-  if (stored && boards.some((board) => board.id === stored)) return stored;
-  const fallback = boards[0].id;
+  const exists = (id: string | null): id is string => Boolean(id) && boards.some((board) => board.id === id);
+  if (exists(tabBoard)) return tabBoard;
+  let candidate: string | null = null;
   try {
-    localStorage.setItem(CURRENT_BOARD_KEY, fallback);
+    candidate = sessionStorage.getItem(TAB_BOARD_KEY);
+    if (!exists(candidate)) candidate = localStorage.getItem(CURRENT_BOARD_KEY);
   } catch {
-    // Ignore.
+    // Storage unavailable — fall back to the first board.
   }
-  return fallback;
+  const id = exists(candidate) ? candidate : boards[0].id;
+  remember(id);
+  return id;
 }
 
 export function setCurrentBoard(id: string): void {
-  try {
-    localStorage.setItem(CURRENT_BOARD_KEY, id);
-  } catch {
-    // Ignore.
-  }
+  remember(id);
+}
+
+/** The storage key a board's scene is saved under. */
+export function boardSceneKey(boardId: string): string {
+  return sceneKey(boardId);
 }
 
 export function createBoard(): BoardMeta {

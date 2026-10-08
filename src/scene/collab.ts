@@ -149,6 +149,10 @@ export class CollabSession {
             this.key,
             await response.arrayBuffer(),
           );
+          // The download can outlive the visit. Leaving right after opening
+          // the link — another room, a new canvas — used to let it finish
+          // anyway and pour this room's drawing into whatever was open by then.
+          if (this.closed) return;
           if (Array.isArray(scene.elements) && scene.elements.length) {
             this.app.applyRemoteScene(scene.elements, scene.files ?? {});
             this.frameOnArrival();
@@ -391,7 +395,9 @@ export class CollabSession {
     } catch {
       return; // Wrong key or corrupt frame — drop it.
     }
-    if (message.from === this.selfId) return;
+    // A frame can still arrive while the socket closes; the canvas it was
+    // meant for may no longer be the one on screen.
+    if (this.closed || message.from === this.selfId) return;
 
     switch (message.t) {
       case "scene":
