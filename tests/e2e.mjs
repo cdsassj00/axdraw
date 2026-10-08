@@ -1835,6 +1835,68 @@ try {
 
   if (SCREENSHOT_DIR) await page.screenshot({ path: `${SCREENSHOT_DIR}/final.png` });
 
+  /* ---------------- two tabs ---------------- */
+
+  // Which canvas is open was one value shared by every tab, while each tab
+  // keeps its own drawing in memory: "New canvas" in one tab made the other
+  // tab save its drawing into that new canvas, and show its name.
+  {
+    const tabs = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+    const tabA = await tabs.newPage();
+    await tabA.goto(BASE, { waitUntil: "networkidle" });
+    await tabA.evaluate(() => {
+      window.axdraw.newBoard();
+      window.axdraw.renameBoard(window.axdraw.currentBoardId(), "탭 A 캔버스");
+    });
+    const boardA = await tabA.evaluate(() => window.axdraw.currentBoardId());
+    const tabB = await tabs.newPage();
+    await tabB.goto(BASE, { waitUntil: "networkidle" });
+    await tabB.evaluate(() => window.axdraw.newBoard());
+    const boardB = await tabB.evaluate(() => window.axdraw.currentBoardId());
+    await tabA.bringToFront();
+    await tabA.keyboard.press("r");
+    await tabA.mouse.move(300, 300);
+    await tabA.mouse.down();
+    await tabA.mouse.move(420, 380, { steps: 6 });
+    await tabA.mouse.up();
+    await tabA.waitForTimeout(700);
+    const counts = await tabA.evaluate(
+      ([a, b]) => {
+        const live = (id) => JSON.parse(localStorage.getItem(`axdraw:scene:${id}`) || '{"elements":[]}').elements.filter((e) => !e.isDeleted).length;
+        return { a: live(a), b: live(b), field: document.querySelector(".board-name-input").value };
+      },
+      [boardA, boardB],
+    );
+    check(
+      "a new canvas in another tab does not take this tab's drawing",
+      counts.a === 1 && counts.b === 0 && counts.field === "탭 A 캔버스",
+      JSON.stringify(counts),
+    );
+
+    // The same canvas open in two tabs: each tab's shapes survive the other's save.
+    await tabB.evaluate((id) => window.axdraw.openBoard(id), boardA);
+    await tabB.bringToFront();
+    await tabB.keyboard.press("r");
+    await tabB.mouse.move(600, 300);
+    await tabB.mouse.down();
+    await tabB.mouse.move(700, 380, { steps: 6 });
+    await tabB.mouse.up();
+    await tabB.waitForTimeout(700);
+    await tabA.bringToFront();
+    await tabA.keyboard.press("o");
+    await tabA.mouse.move(300, 500);
+    await tabA.mouse.down();
+    await tabA.mouse.move(400, 580, { steps: 6 });
+    await tabA.mouse.up();
+    await tabA.waitForTimeout(700);
+    const same = await tabA.evaluate(
+      (id) => JSON.parse(localStorage.getItem(`axdraw:scene:${id}`)).elements.filter((e) => !e.isDeleted).length,
+      boardA,
+    );
+    check("the same canvas in two tabs keeps both tabs' shapes", same === 3, `${same} saved`);
+    await tabs.close();
+  }
+
   /* ---------------- phone layout ---------------- */
 
   // The phone layout once stacked zoom and undo on top of the top row:

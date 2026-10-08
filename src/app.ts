@@ -125,6 +125,7 @@ import {
 import { renderStaticScene, screenToScene, type Viewport } from "./scene/renderer";
 import {
   appendToBoard,
+  boardSceneKey,
   removeFromBoard,
   clearStoredScene,
   createBoard,
@@ -596,6 +597,7 @@ export class App implements CloudHost {
       this.cloud.flush();
     });
     window.addEventListener("resize", () => this.resize());
+    window.addEventListener("storage", this.handleOtherTabSave);
     window.addEventListener("paste", this.handlePaste);
     window.addEventListener("copy", this.handleCopyEvent);
     window.addEventListener("cut", this.handleCutEvent);
@@ -603,6 +605,29 @@ export class App implements CloudHost {
     this.container.addEventListener("dragover", (event) => event.preventDefault());
     this.container.addEventListener("drop", this.handleDrop);
   }
+
+  /**
+   * Another tab saved the canvas this tab has open. Saves used to simply
+   * replace each other, so with the same canvas in two tabs whichever saved
+   * last silently erased the other's additions. Merge instead — the same
+   * element-wise rule rooms use; deletions are tombstones, so they carry over
+   * too. Nothing is saved back from here: the merge changes only this tab's
+   * memory, and its next own save writes the union.
+   */
+  private handleOtherTabSave = (event: StorageEvent): void => {
+    if (!event.newValue || event.key !== boardSceneKey(currentBoardId())) return;
+    let saved: { elements?: unknown[]; files?: BinaryFiles };
+    try {
+      saved = JSON.parse(event.newValue);
+    } catch {
+      return;
+    }
+    if (!Array.isArray(saved.elements)) return;
+    this.elements = mergeElements(this.elements, saved.elements, (id) => this.remoteElementIds.add(id));
+    Object.assign(this.files, saved.files ?? {});
+    this.scheduleRender();
+    this.notify();
+  };
 
   /** Set by the UI so right-click can open the menu. */
   onContextMenu: ((point: Point, clientX: number, clientY: number) => void) | null = null;
