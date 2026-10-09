@@ -1841,6 +1841,9 @@ try {
   // millisecond: whichever copy each side starts from, both must settle on
   // the same one, or their canvases disagree until someone edits it again.
   {
+    await resetView();
+    await page.keyboard.press("r");
+    await drag([300, 300], [420, 380]);
     const outcome = await page.evaluate(() => {
       const app = window.axdraw;
       const base = app.elements.find((e) => !e.isDeleted) ?? null;
