@@ -1835,6 +1835,31 @@ try {
 
   if (SCREENSHOT_DIR) await page.screenshot({ path: `${SCREENSHOT_DIR}/final.png` });
 
+  /* ---------------- tie between two edits ---------------- */
+
+  // The same shape changed by two people the same number of times in the same
+  // millisecond: whichever copy each side starts from, both must settle on
+  // the same one, or their canvases disagree until someone edits it again.
+  {
+    await resetView();
+    await page.keyboard.press("r");
+    await drag([300, 300], [420, 380]);
+    const outcome = await page.evaluate(() => {
+      const app = window.axdraw;
+      const base = app.elements.find((e) => !e.isDeleted) ?? null;
+      if (!base) return null;
+      const left = { ...base, x: 111, version: 99, updated: 1700000000000 };
+      const right = { ...base, x: 222, version: 99, updated: 1700000000000 };
+      const settle = (mine, theirs) => {
+        app.elements = app.elements.map((e) => (e.id === base.id ? mine : e));
+        app.applyRemoteScene([theirs], {});
+        return app.elements.find((e) => e.id === base.id).x;
+      };
+      return [settle(left, right), settle(right, left)];
+    });
+    check("an exact tie between two edits settles the same way on both sides", outcome && outcome[0] === outcome[1], JSON.stringify(outcome));
+  }
+
   /* ---------------- two tabs ---------------- */
 
   // Which canvas is open was one value shared by every tab, while each tab

@@ -25,6 +25,8 @@ const ACCOUNT_KEY = "axdraw:cloud";
 export const CLOUD_HASH_PATTERN = /^#cloud=([A-Za-z0-9]{10,40}),([A-Za-z0-9_-]{20,60})$/;
 
 export interface CloudAccount {
+  /** "account" once it has a password; absent for the earlier email-only saving. */
+  kind?: "account";
   workspace: string;
   /** base64url, 32 random bytes. The only copy is this browser (and the link). */
   secret: string;
@@ -116,6 +118,76 @@ export async function registerCloud(
   if (!response.ok) throw await failure(response, "Could not switch on cloud saving");
   const { workspace } = (await response.json()) as { workspace: string };
   const account = { workspace, secret, email: email.trim().toLowerCase() };
+  storeAccount(account);
+  return account;
+}
+
+/**
+ * The password, stretched in the browser so the server never sees it: PBKDF2,
+ * 200,000 rounds, salted with the email. The server stores only a salted hash
+ * of the result.
+ */
+async function authKeyFor(email: string, password: string): Promise<string> {
+  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      hash: "SHA-256",
+      salt: new TextEncoder().encode(`axdraw-account:${email.trim().toLowerCase()}`),
+      iterations: 200_000,
+    },
+    material,
+    256,
+  );
+  return toBase64Url(new Uint8Array(bits));
+}
+
+async function accountRequest(path: string, body: unknown): Promise<{ workspace: string; secret: string }> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (response.status === 401) throw new Error("Wrong email or password");
+  if (response.status === 409) throw new Error("This email already has an account — log in instead");
+  if (response.status === 429) throw new Error("Too many attempts — try again in 15 minutes");
+  if (!response.ok) throw await failure(response, "Could not reach the server");
+  return (await response.json()) as { workspace: string; secret: string };
+}
+
+/**
+ * Creates an account. Whatever this browser already keeps in the cloud comes
+ * along: an earlier link-based workspace becomes the account's.
+ */
+export async function signupAccount(
+  email: string,
+  password: string,
+  consent: { privacy: boolean; marketing: boolean },
+): Promise<CloudAccount> {
+  const existing = cloudAccount();
+  const secret = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+  const result = await accountRequest("/api/account/signup", {
+    email,
+    authKey: await authKeyFor(email, password),
+    privacy: consent.privacy,
+    marketing: consent.marketing,
+    workspace: existing
+      ? { id: existing.workspace, secret: existing.secret, token: await tokenFor(existing.secret) }
+      : undefined,
+    fresh: { secret, token: await tokenFor(secret) },
+  });
+  const account: CloudAccount = { kind: "account", workspace: result.workspace, secret: result.secret, email: email.trim().toLowerCase() };
+  storeAccount(account);
+  return account;
+}
+
+/** Logs in on this device: the account's canvases follow. */
+export async function loginAccount(email: string, password: string): Promise<CloudAccount> {
+  const result = await accountRequest("/api/account/login", {
+    email,
+    authKey: await authKeyFor(email, password),
+  });
+  const account: CloudAccount = { kind: "account", workspace: result.workspace, secret: result.secret, email: email.trim().toLowerCase() };
   storeAccount(account);
   return account;
 }

@@ -895,6 +895,9 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
   menu.append(
     menuItem("plus", "New canvas", null, run(() => app.newBoard())),
     menuItem("duplicate", "Boards…", null, run(() => openBoardsDialog(app))),
+    menuItem("trash", "Remove empty canvases and rooms", null, run(() => {
+      void app.cleanupEmpty().then((removed) => app.reportCleanup(removed));
+    })),
     h("div", { class: "dropdown-separator" }),
     menuItem("upload", "Open…", "Ctrl+O", run(() => void app.openFile())),
     menuItem("upload", "Attach file…", null, run(() => app.pickAttachment())),
@@ -1155,7 +1158,14 @@ function openBoardsDialog(app: App): void {
                 board.shareId ? h("span", { class: "board-badge", text: t("Received copy") }) : null,
                 board.remote ? h("span", { class: "board-badge", text: t("In the cloud") }) : null,
               ]),
-              h("span", { class: "board-date", text: new Date(board.updated).toLocaleString() }),
+              h("span", {
+                class: "board-date",
+                text: `${
+                  board.remote
+                    ? t("in your account")
+                    : t("{n} shapes").replace("{n}", String(app.boardDrawingCount(board.id)))
+                } · ${new Date(board.updated).toLocaleString()}`,
+              }),
             ],
           ),
           h("button", {

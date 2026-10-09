@@ -1,6 +1,7 @@
 import "./style.css";
 import { App } from "./app";
 import { createUI } from "./ui";
+import { watchForUpdates } from "./update";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("#root is missing from the page");
@@ -18,7 +19,21 @@ else if (!location.hash.startsWith("#cloud=")) void app.resumeRoom();
 
 // Cloud canvases: lists what other devices saved, uploads what is new here.
 // A #cloud=… link (from "open on another device") adopts that workspace first.
-void app.startCloud();
+const openedPlainly = !location.hash;
+void app.startCloud().then(async () => {
+  // A one-time sweep of the empty canvases and dead room links that piled up
+  // while those bugs were live. Only on a plain visit: a link someone just
+  // opened is never the moment to tidy around it.
+  const CLEANUP_FLAG = "axdraw:cleanup-v1";
+  try {
+    if (!openedPlainly || localStorage.getItem(CLEANUP_FLAG)) return;
+    const removed = await app.cleanupEmpty();
+    localStorage.setItem(CLEANUP_FLAG, String(Date.now()));
+    if (removed.canvases || removed.rooms) app.reportCleanup(removed);
+  } catch {
+    // Storage unavailable: nothing to tidy.
+  }
+});
 
 // Pasting a link into a tab that already has axdraw open only changes the
 // fragment, which is a same-document navigation: nothing reloads, so without
@@ -28,6 +43,8 @@ window.addEventListener("hashchange", () => {
   void app.loadFromShareLink();
   void app.joinCollabFromHash();
 });
+
+watchForUpdates({ busy: () => app.isBusy(), beforeReload: () => app.saveNow() });
 
 // Handy for debugging from the console.
 (window as unknown as { axdraw: App }).axdraw = app;

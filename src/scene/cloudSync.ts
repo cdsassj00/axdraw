@@ -154,6 +154,14 @@ export class CloudSync {
     }
   }
 
+  /** Resolves once nothing is waiting to be saved (or after 10s at most). */
+  async idle(): Promise<void> {
+    const deadline = Date.now() + 10000;
+    while ((this.pushing.size || this.timer !== null) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
   renamed(boardId: string): void {
     if (!this.account) return;
     void this.push(boardId, true);

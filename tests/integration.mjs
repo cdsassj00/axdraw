@@ -352,6 +352,196 @@ try {
     leaked.onScreen === 0 && leaked.stored === 0,
     JSON.stringify(leaked),
   );
+
+  // "Bring everyone to my view": one press puts every participant's screen on
+  // the area the presenter is looking at.
+  const presenter = await profile("presenter");
+  const pPage = await presenter.open();
+  await pPage.evaluate(() => window.axdraw.startCollab());
+  await pPage.waitForFunction(() => Boolean(window.axdraw.collab));
+  const gatherUrl = await pPage.evaluate(() => window.axdraw.collab.url);
+  const attendee = await profile("attendee");
+  const aPage = await attendee.open(gatherUrl);
+  await aPage.waitForFunction(() => Boolean(window.axdraw.collab), null, { timeout: 10000 });
+  await aPage.waitForTimeout(800);
+  await pPage.evaluate(() => {
+    const app = window.axdraw;
+    app.state.scrollX = -6000;
+    app.state.scrollY = -4000;
+    app.render();
+  });
+  await pPage.click(".share-btn");
+  await pPage.click(".share-gather");
+  await pPage.keyboard.press("Escape");
+  await aPage.waitForTimeout(1500);
+  const centres = await Promise.all(
+    [pPage, aPage].map((pg) =>
+      pg.evaluate(() => {
+        const { zoom, scrollX, scrollY } = window.axdraw.state;
+        return [innerWidth / 2 / zoom - scrollX, innerHeight / 2 / zoom - scrollY].map(Math.round);
+      }),
+    ),
+  );
+  check(
+    "gathering moves a participant's view onto the presenter's",
+    Math.abs(centres[0][0] - centres[1][0]) < 60 && Math.abs(centres[0][1] - centres[1][1]) < 60,
+    JSON.stringify(centres),
+  );
+
+  // A real class: three people drawing at the same moment, two of them
+  // dragging the same shape. Everyone must end with the same canvas — every
+  // shape once, nothing duplicated, the dragged shape in one place.
+  const crowd = [aPage];
+  for (const name of ["student-b", "student-c"]) {
+    const extra = await (await profile(name)).open(gatherUrl);
+    await extra.waitForFunction(() => Boolean(window.axdraw.collab), null, { timeout: 10000 });
+    crowd.push(extra);
+  }
+  await pPage.evaluate(() => window.axdraw.newBoard()).catch(() => undefined);
+  const everyone = [pPage, ...crowd].slice(1); // the three students
+  await Promise.all(
+    everyone.map((pg, who) =>
+      pg.evaluate(async (who) => {
+        const app = window.axdraw;
+        for (let i = 0; i < 5; i++) {
+          app.setTool?.("rectangle");
+          // Shapes straight through the API, at the same time from all three.
+          const id = `p${who}-${i}`;
+          const now = Date.now();
+          app.elements = [
+            ...app.elements,
+            {
+              id, type: "rectangle", x: who * 300, y: i * 120, width: 100, height: 80, angle: 0,
+              strokeColor: "#1e1e1e", backgroundColor: "transparent", fillStyle: "hachure", strokeWidth: 2,
+              strokeStyle: "solid", roughness: 1, opacity: 100, groupIds: [], frameId: null, roundness: null,
+              seed: 1, version: 1, versionNonce: 1, isDeleted: false, boundElements: null, updated: now,
+              link: null, locked: false,
+            },
+          ];
+          app.commit();
+          await new Promise((r) => setTimeout(r, 60));
+        }
+      }, who),
+    ),
+  );
+  await everyone[0].waitForTimeout(3000);
+  // Two people drag the same shape at once.
+  await Promise.all(
+    everyone.slice(0, 2).map((pg, who) =>
+      pg.evaluate((dx) => {
+        const app = window.axdraw;
+        const target = app.elements.find((e) => e.id === "p2-0");
+        if (!target) return;
+        app.elements = app.elements.map((e) =>
+          e.id === "p2-0" ? { ...e, x: e.x + dx, version: e.version + 1, updated: Date.now() } : e,
+        );
+        app.commit();
+      }, who === 0 ? 50 : -50),
+    ),
+  );
+  await everyone[0].waitForTimeout(3000);
+  const views = await Promise.all(
+    everyone.map((pg) =>
+      pg.evaluate(() => {
+        const live = window.axdraw.elements.filter((e) => !e.isDeleted && /^p\d-\d$/.test(e.id));
+        return {
+          count: live.length,
+          unique: new Set(live.map((e) => e.id)).size,
+          dragged: live.find((e) => e.id === "p2-0")?.x ?? null,
+        };
+      }),
+    ),
+  );
+  check(
+    "three people drawing at once all end with every shape, exactly once",
+    views.every((v) => v.count === 15 && v.unique === 15),
+    JSON.stringify(views),
+  );
+  check(
+    "a shape two people dragged at once ends in the same place for everyone",
+    views.every((v) => v.dragged !== null && v.dragged === views[0].dragged),
+    JSON.stringify(views.map((v) => v.dragged)),
+  );
+
+  // The sweep of empty canvases and dead room links.
+  const tidy = await profile("tidy");
+  const tPage2 = await tidy.open();
+  const roomKey = /#room=[A-Za-z0-9]+,([A-Za-z0-9_-]+)/.exec(roomUrl)[1];
+  await tPage2.evaluate(
+    ({ roomId, roomKey }) => {
+      const app = window.axdraw;
+      app.newBoard(); // empty
+      app.newBoard(); // empty, will be the one with work
+    },
+    { roomId, roomKey },
+  );
+  await rect(tPage2, [300, 300], [420, 380]);
+  const workBoard = await tPage2.evaluate(() => window.axdraw.currentBoardId());
+  await tPage2.evaluate(
+    ({ roomId, roomKey }) => {
+      // A room canvas whose copy here is empty, while the room has a drawing on
+      // the server; a link to a room that has nothing; a link to the room with
+      // a drawing but no canvas here.
+      const boards = JSON.parse(localStorage.getItem("axdraw:boards"));
+      boards.push({ id: "roomcopy", name: "협업 old", updated: Date.now(), room: { id: roomId, key: roomKey } });
+      localStorage.setItem("axdraw:boards", JSON.stringify(boards));
+      localStorage.setItem(
+        "axdraw:rooms",
+        JSON.stringify([
+          { id: "deadroom00000001", key: "AAAAAAAAAAAAAAAAAAAAAA", name: "빈 방", visited: Date.now() },
+          { id: roomId, key: roomKey, name: "그림 있는 방", visited: Date.now() },
+        ]),
+      );
+      window.axdraw.newBoard(); // open on a blank canvas
+    },
+    { roomId, roomKey },
+  );
+  const removed = await tPage2.evaluate(() => window.axdraw.cleanupEmpty());
+  const tidied = await tPage2.evaluate(() => ({
+    boards: window.axdraw.listBoards().map((b) => b.id),
+    rooms: JSON.parse(localStorage.getItem("axdraw:rooms")).map((r) => r.name),
+    open: window.axdraw.currentBoardId(),
+  }));
+  check(
+    "the sweep removes empty canvases and links to empty rooms",
+    removed.canvases === 3 && removed.rooms === 1 && !tidied.rooms.includes("빈 방"),
+    JSON.stringify({ removed, tidied }),
+  );
+  check(
+    "and keeps the canvas with work, plus a room canvas whose drawing is on the server",
+    tidied.boards.includes(workBoard) && tidied.boards.includes("roomcopy") && tidied.rooms.includes("그림 있는 방"),
+    JSON.stringify(tidied),
+  );
+  check("and opens the canvas with work instead of a blank one", tidied.open === workBoard);
+
+  // A room saved while scenes went to KV — before the R2 bucket existed.
+  if (!LIVE) {
+    const sealed = await tPage2.evaluate(async () => {
+      const element = window.axdraw.elements.find((e) => !e.isDeleted);
+      const keyBytes = crypto.getRandomValues(new Uint8Array(16));
+      const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const plain = new TextEncoder().encode(JSON.stringify({ elements: [element], files: {} }));
+      const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plain));
+      const body = new Uint8Array(iv.length + cipher.length);
+      body.set(iv);
+      body.set(cipher, iv.length);
+      const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
+      return { key: b64(keyBytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""), body: b64(body) };
+    });
+    const kvRoom = "kvroom0000000001";
+    const file = join(work, "kvscene.bin");
+    writeFileSync(file, Buffer.from(sealed.body, "base64"));
+    execFileSync(
+      WRANGLER[0],
+      [...WRANGLER.slice(1), "kv", "key", "put", `room:${kvRoom}`, "--path", file, "--binding", "SCENES", "--local", "--persist-to", state, "-c", config],
+      { cwd: work, stdio: "ignore" },
+    );
+    const old = await profile("old-room");
+    const oldPage = await old.open(`${BASE}/#room=${kvRoom},${sealed.key}`);
+    await oldPage.waitForFunction(() => window.axdraw.elements.some((e) => !e.isDeleted), null, { timeout: 15000 }).catch(() => undefined);
+    check("a room saved before the move to R2 still opens with its drawing", (await live(oldPage)).length === 1);
+  }
   }
 
   /* -------------------------------------------------- cloud -- */
@@ -396,23 +586,42 @@ try {
   // A throwaway address on a live site; the run deletes it again at the end.
   const testEmail = LIVE ? `e2e-check+${Date.now()}@example.com` : "teacher@example.com";
 
+  const PASSWORD = "class-2026!";
+  /** Sign up through the window a person uses: the chip, then "create an account". */
+  const signup = async (page, email, { consent = true, marketing = true } = {}) => {
+    await page.click(".cloud-chip");
+    await page.click(".cloud-swap");
+    await page.fill(".cloud-email", email);
+    await page.fill(".cloud-password", PASSWORD);
+    await page.fill(".cloud-password-confirm", PASSWORD);
+    if (consent) await page.check(".consent-privacy");
+    if (marketing) await page.check(".consent-marketing");
+    await page.click(".cloud-submit");
+  };
+  const login = async (page, email, password = PASSWORD) => {
+    await page.click(".cloud-chip");
+    await page.fill(".cloud-email", email);
+    await page.fill(".cloud-password", password);
+    await page.click(".cloud-submit");
+  };
+  const chipState = (page) => page.getAttribute(".cloud-chip", "data-state");
+
   const laptop = await profile("laptop");
   const lPage = await laptop.open();
   await rect(lPage, [300, 300], [420, 380]);
-  check("the cloud chip starts in 'only in this browser'", (await lPage.getAttribute(".cloud-chip", "data-state")) === "off");
-  await lPage.click(".cloud-chip");
-  await lPage.fill(".cloud-email", LIVE ? testEmail : "Teacher@Example.com");
-  await lPage.click(".cloud-submit");
+  check("the cloud chip starts at 'log in'", (await chipState(lPage)) === "off");
+  await signup(lPage, LIVE ? testEmail : "Teacher@Example.com", { consent: false });
+  await lPage.waitForFunction(() => (document.querySelector(".cloud-error")?.textContent ?? "").length > 0);
   check(
     "the required consent cannot be skipped",
-    ((await lPage.textContent(".cloud-error")) ?? "").length > 0 && (await lPage.evaluate(() => !localStorage.getItem("axdraw:cloud"))),
+    await lPage.evaluate(() => !localStorage.getItem("axdraw:cloud")),
     await lPage.textContent(".cloud-error"),
   );
   await lPage.check(".consent-privacy");
   await lPage.check(".consent-marketing");
   await lPage.click(".cloud-submit");
-  await lPage.waitForFunction(() => document.querySelector(".cloud-chip")?.dataset.state === "saved", null, { timeout: 15000 });
-  check("signing up switches cloud saving on", true);
+  await lPage.waitForFunction(() => document.querySelector(".cloud-chip")?.dataset.state === "saved", null, { timeout: 20000 });
+  check("signing up switches saving to the account on", true);
   if (LIVE) {
     const account = await cloudApi(lPage, "/api/cloud/account");
     check(
@@ -422,16 +631,21 @@ try {
     );
   } else {
     const lead = sql("SELECT email, marketing_consent, consent_version FROM leads");
+    const accounts = sql("SELECT email, length(pw_hash) AS hash FROM accounts");
     check(
       "the email and both consents are recorded",
       lead.length === 1 && lead[0].email === "teacher@example.com" && lead[0].marketing_consent === 1,
       JSON.stringify(lead),
     );
+    check(
+      "the password is stored only as a hash",
+      accounts.length === 1 && accounts[0].hash === 64 && !JSON.stringify(sql("SELECT * FROM accounts")).includes(PASSWORD),
+      JSON.stringify(accounts),
+    );
   }
 
   await lPage.evaluate(() => window.axdraw.newBoard());
   await rect(lPage, [500, 400], [620, 480]);
-  await lPage.waitForTimeout(3500);
   const listStored = async () =>
     LIVE ? (await cloudApi(lPage, "/api/cloud/canvases")).body.canvases : sql("SELECT id, name, size FROM canvases");
   let stored = await listStored();
@@ -440,19 +654,23 @@ try {
     await lPage.waitForTimeout(1000);
     stored = await listStored();
   }
-  check("every canvas is saved to the cloud", stored.length === 2, `${stored.length} canvases`);
+  check("every canvas is saved to the account", stored.length === 2, `${stored.length} canvases`);
   check("canvas names reach the server encrypted", stored.every((row) => !/캔버스/.test(row.name)), stored.map((r) => r.name.slice(0, 12)).join(","));
 
-  await lPage.click(".cloud-chip");
-  await lPage.click(".cloud-copy-link");
-  const cloudUrl = await lastCopied(lPage);
-  await lPage.keyboard.press("Escape");
-
+  // Another device: nothing but the email and password.
   const tablet = await profile("tablet");
-  const tabPage = await tablet.open(cloudUrl);
-  await tabPage.waitForFunction(() => window.axdraw.listBoards().length >= 2, null, { timeout: 15000 });
-  await tabPage.waitForFunction(() => window.axdraw.elements.some((e) => !e.isDeleted), null, { timeout: 15000 });
-  check("the other device lists the same canvases", (await boards(tabPage)).filter((b) => b.cloudSynced || b.remote).length >= 2);
+  const tabPage = await tablet.open();
+  await login(tabPage, LIVE ? testEmail : "teacher@example.com", "wrong-password");
+  await tabPage.waitForFunction(() => (document.querySelector(".cloud-error")?.textContent ?? "").length > 0, null, { timeout: 15000 });
+  check("a wrong password is refused", /Wrong email or password/.test(await tabPage.textContent(".cloud-error")), await tabPage.textContent(".cloud-error"));
+  await tabPage.fill(".cloud-password", PASSWORD);
+  await tabPage.click(".cloud-submit");
+  await tabPage.waitForFunction(() => window.axdraw.elements.some((e) => !e.isDeleted), null, { timeout: 20000 });
+  check(
+    "logging in on another device lists the account's canvases",
+    (await boards(tabPage)).filter((b) => b.cloudSynced || b.remote).length >= 2,
+    JSON.stringify((await boards(tabPage)).map((b) => b.name)),
+  );
   check("and opens one with its drawing", (await live(tabPage)).length === 1);
 
   // Both devices edit the same canvas without seeing each other's save.
@@ -489,6 +707,23 @@ try {
     `laptop ${laptopView}, tablet ${tabletView}`,
   );
 
+  // Log out on the tablet — a shared classroom computer.
+  await tabPage.click(".cloud-chip");
+  await tabPage.click(".cloud-logout");
+  await tabPage.waitForFunction(() => document.querySelector(".cloud-chip")?.dataset.state === "off", null, { timeout: 15000 });
+  const afterLogout = await tabPage.evaluate(() => ({
+    left: window.axdraw.listBoards().filter((b) => b.cloudSynced || b.remote).length,
+    onScreen: window.axdraw.elements.filter((e) => !e.isDeleted).length,
+    account: localStorage.getItem("axdraw:cloud"),
+  }));
+  check(
+    "logging out removes the account's canvases from that device",
+    afterLogout.left === 0 && afterLogout.onScreen === 0 && afterLogout.account === null,
+    JSON.stringify(afterLogout),
+  );
+  const stillStored = (await listStored()).length;
+  check("and they stay in the account", stillStored === 2, `${stillStored} in the account`);
+
   await lPage.click(".cloud-chip");
   await lPage.waitForFunction(() => !document.querySelector(".consent-marketing")?.disabled);
   await lPage.uncheck(".consent-marketing");
@@ -508,16 +743,48 @@ try {
   if (LIVE) {
     // The account is gone, so its old credentials no longer open anything.
     const after = await cloudApi(lPage, "/api/cloud/canvases", credentials);
-    check("deleting cloud data removes the email and every canvas", after.status === 401, `status ${after.status}`);
+    check("deleting the account removes the email and every canvas", after.status === 401, `status ${after.status}`);
   } else {
-    const left = sql("SELECT (SELECT count(*) FROM leads) AS leads, (SELECT count(*) FROM workspaces) AS workspaces, (SELECT count(*) FROM canvases) AS canvases");
+    const left = sql(
+      "SELECT (SELECT count(*) FROM leads) AS leads, (SELECT count(*) FROM workspaces) AS workspaces, (SELECT count(*) FROM canvases) AS canvases, (SELECT count(*) FROM accounts) AS accounts",
+    );
     check(
-      "deleting cloud data removes the email and every canvas",
-      left[0].leads === 0 && left[0].workspaces === 0 && left[0].canvases === 0,
+      "deleting the account removes the email and every canvas",
+      left[0].leads === 0 && left[0].workspaces === 0 && left[0].canvases === 0 && left[0].accounts === 0,
       JSON.stringify(left[0]),
     );
   }
   check("and this browser keeps its own copies", (await boards(lPage)).length >= 2);
+
+  // Someone who saved with the earlier email-only cloud keeps those canvases
+  // when they create an account.
+  if (!LIVE) {
+    const veteran = await profile("veteran");
+    const vetPage = await veteran.open();
+    await rect(vetPage, [300, 300], [420, 380]);
+    await vetPage.evaluate(() => window.axdraw.enableCloud("veteran@example.com", { privacy: true, marketing: false }));
+    await vetPage.waitForTimeout(3500);
+    const before = await vetPage.evaluate(() => JSON.parse(localStorage.getItem("axdraw:cloud")).workspace);
+    // Their account window offers to choose a password, email filled in.
+    await vetPage.click(".cloud-chip");
+    await vetPage.click(".cloud-make-account");
+    check("an email-only saver is offered a password", (await vetPage.inputValue(".cloud-email")) === "veteran@example.com");
+    await vetPage.fill(".cloud-password", PASSWORD);
+    await vetPage.fill(".cloud-password-confirm", PASSWORD);
+    await vetPage.check(".consent-privacy");
+    await vetPage.click(".cloud-submit");
+    await vetPage.waitForFunction(() => document.querySelector(".cloud-chip")?.dataset.state === "saved", null, { timeout: 20000 });
+    const after = await vetPage.evaluate(() => JSON.parse(localStorage.getItem("axdraw:cloud")).workspace);
+    const phone = await profile("veteran-phone");
+    const phonePage = await phone.open();
+    await login(phonePage, "veteran@example.com");
+    await phonePage.waitForFunction(() => window.axdraw.elements.some((e) => !e.isDeleted), null, { timeout: 20000 });
+    check(
+      "an account created over earlier cloud saving keeps those canvases",
+      before === after && (await live(phonePage)).length === 1,
+      `${before} -> ${after}`,
+    );
+  }
 
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (error) {
