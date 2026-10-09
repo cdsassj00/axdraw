@@ -9,10 +9,15 @@ import type { AxElement } from "../types";
 import { normalizeImportedElement } from "./export";
 
 export function isNewer(candidate: AxElement, current: AxElement): boolean {
-  return (
-    candidate.version > current.version ||
-    (candidate.version === current.version && candidate.updated > current.updated)
-  );
+  if (candidate.version !== current.version) return candidate.version > current.version;
+  if (candidate.updated !== current.updated) return candidate.updated > current.updated;
+  // Two people changed the same shape the same number of times within the
+  // same millisecond. Without a rule both would keep their own version and the
+  // canvases would quietly disagree; comparing the content itself makes every
+  // browser pick the same one.
+  const a = JSON.stringify(candidate);
+  const b = JSON.stringify(current);
+  return a !== b && a > b;
 }
 
 /**

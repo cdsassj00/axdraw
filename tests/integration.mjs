@@ -388,6 +388,81 @@ try {
     JSON.stringify(centres),
   );
 
+  // A real class: three people drawing at the same moment, two of them
+  // dragging the same shape. Everyone must end with the same canvas — every
+  // shape once, nothing duplicated, the dragged shape in one place.
+  const crowd = [aPage];
+  for (const name of ["student-b", "student-c"]) {
+    const extra = await (await profile(name)).open(gatherUrl);
+    await extra.waitForFunction(() => Boolean(window.axdraw.collab), null, { timeout: 10000 });
+    crowd.push(extra);
+  }
+  await pPage.evaluate(() => window.axdraw.newBoard()).catch(() => undefined);
+  const everyone = [pPage, ...crowd].slice(1); // the three students
+  await Promise.all(
+    everyone.map((pg, who) =>
+      pg.evaluate(async (who) => {
+        const app = window.axdraw;
+        for (let i = 0; i < 5; i++) {
+          app.setTool?.("rectangle");
+          // Shapes straight through the API, at the same time from all three.
+          const id = `p${who}-${i}`;
+          const now = Date.now();
+          app.elements = [
+            ...app.elements,
+            {
+              id, type: "rectangle", x: who * 300, y: i * 120, width: 100, height: 80, angle: 0,
+              strokeColor: "#1e1e1e", backgroundColor: "transparent", fillStyle: "hachure", strokeWidth: 2,
+              strokeStyle: "solid", roughness: 1, opacity: 100, groupIds: [], frameId: null, roundness: null,
+              seed: 1, version: 1, versionNonce: 1, isDeleted: false, boundElements: null, updated: now,
+              link: null, locked: false,
+            },
+          ];
+          app.commit();
+          await new Promise((r) => setTimeout(r, 60));
+        }
+      }, who),
+    ),
+  );
+  await everyone[0].waitForTimeout(3000);
+  // Two people drag the same shape at once.
+  await Promise.all(
+    everyone.slice(0, 2).map((pg, who) =>
+      pg.evaluate((dx) => {
+        const app = window.axdraw;
+        const target = app.elements.find((e) => e.id === "p2-0");
+        if (!target) return;
+        app.elements = app.elements.map((e) =>
+          e.id === "p2-0" ? { ...e, x: e.x + dx, version: e.version + 1, updated: Date.now() } : e,
+        );
+        app.commit();
+      }, who === 0 ? 50 : -50),
+    ),
+  );
+  await everyone[0].waitForTimeout(3000);
+  const views = await Promise.all(
+    everyone.map((pg) =>
+      pg.evaluate(() => {
+        const live = window.axdraw.elements.filter((e) => !e.isDeleted && /^p\d-\d$/.test(e.id));
+        return {
+          count: live.length,
+          unique: new Set(live.map((e) => e.id)).size,
+          dragged: live.find((e) => e.id === "p2-0")?.x ?? null,
+        };
+      }),
+    ),
+  );
+  check(
+    "three people drawing at once all end with every shape, exactly once",
+    views.every((v) => v.count === 15 && v.unique === 15),
+    JSON.stringify(views),
+  );
+  check(
+    "a shape two people dragged at once ends in the same place for everyone",
+    views.every((v) => v.dragged !== null && v.dragged === views[0].dragged),
+    JSON.stringify(views.map((v) => v.dragged)),
+  );
+
   // The sweep of empty canvases and dead room links.
   const tidy = await profile("tidy");
   const tPage2 = await tidy.open();
