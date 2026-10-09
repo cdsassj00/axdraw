@@ -690,7 +690,14 @@ try {
     await vetPage.evaluate(() => window.axdraw.enableCloud("veteran@example.com", { privacy: true, marketing: false }));
     await vetPage.waitForTimeout(3500);
     const before = await vetPage.evaluate(() => JSON.parse(localStorage.getItem("axdraw:cloud")).workspace);
-    await signup(vetPage, "veteran@example.com", { marketing: false });
+    // Their account window offers to choose a password, email filled in.
+    await vetPage.click(".cloud-chip");
+    await vetPage.click(".cloud-make-account");
+    check("an email-only saver is offered a password", (await vetPage.inputValue(".cloud-email")) === "veteran@example.com");
+    await vetPage.fill(".cloud-password", PASSWORD);
+    await vetPage.fill(".cloud-password-confirm", PASSWORD);
+    await vetPage.check(".consent-privacy");
+    await vetPage.click(".cloud-submit");
     await vetPage.waitForFunction(() => document.querySelector(".cloud-chip")?.dataset.state === "saved", null, { timeout: 20000 });
     const after = await vetPage.evaluate(() => JSON.parse(localStorage.getItem("axdraw:cloud")).workspace);
     const phone = await profile("veteran-phone");

@@ -25,6 +25,8 @@ const ACCOUNT_KEY = "axdraw:cloud";
 export const CLOUD_HASH_PATTERN = /^#cloud=([A-Za-z0-9]{10,40}),([A-Za-z0-9_-]{20,60})$/;
 
 export interface CloudAccount {
+  /** "account" once it has a password; absent for the earlier email-only saving. */
+  kind?: "account";
   workspace: string;
   /** base64url, 32 random bytes. The only copy is this browser (and the link). */
   secret: string;
@@ -174,7 +176,7 @@ export async function signupAccount(
       : undefined,
     fresh: { secret, token: await tokenFor(secret) },
   });
-  const account = { workspace: result.workspace, secret: result.secret, email: email.trim().toLowerCase() };
+  const account: CloudAccount = { kind: "account", workspace: result.workspace, secret: result.secret, email: email.trim().toLowerCase() };
   storeAccount(account);
   return account;
 }
@@ -185,7 +187,7 @@ export async function loginAccount(email: string, password: string): Promise<Clo
     email,
     authKey: await authKeyFor(email, password),
   });
-  const account = { workspace: result.workspace, secret: result.secret, email: email.trim().toLowerCase() };
+  const account: CloudAccount = { kind: "account", workspace: result.workspace, secret: result.secret, email: email.trim().toLowerCase() };
   storeAccount(account);
   return account;
 }

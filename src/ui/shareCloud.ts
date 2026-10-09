@@ -163,8 +163,8 @@ function terms(lines: string[]): HTMLElement {
  * whole of it, so that "open my drawings on this computer" is the same act
  * everywhere — the way any other online service works.
  */
-function openLogin(app: App, mode: "login" | "signup"): void {
-  const email = h("input", { class: "cloud-email", type: "email", required: true, autocomplete: "email", placeholder: "name@example.com" });
+function openLogin(app: App, mode: "login" | "signup", prefill = ""): void {
+  const email = h("input", { class: "cloud-email", type: "email", required: true, autocomplete: "email", placeholder: "name@example.com", value: prefill || undefined });
   const password = h("input", {
     class: "cloud-password",
     type: "password",
@@ -285,10 +285,26 @@ function openCloudAccount(app: App): void {
   const dialog = modal("min(440px, 100%)", [
     h("div", { class: "modal-header" }, [h("h2", { text: t("My account") })]),
     h("p", { class: "cloud-status" }, [emailText, ` · ${cloudChipLabel(app).text}`]),
-    h("p", {
-      class: "rooms-note",
-      text: t("Every canvas, including live rooms you joined, is saved to this account. Log in with this email on another device to open them there."),
-    }),
+    account.kind === "account"
+      ? h("p", {
+          class: "rooms-note",
+          text: t("Every canvas, including live rooms you joined, is saved to this account. Log in with this email on another device to open them there."),
+        })
+      : h("div", { class: "share-option is-recommended" }, [
+          h("p", {
+            class: "rooms-note",
+            text: t("Your canvases are saved, but only this browser can open them. Choose a password to open them anywhere by logging in."),
+          }),
+          h("button", {
+            class: "primary-btn cloud-make-account",
+            type: "button",
+            text: t("Choose a password"),
+            onclick: () => {
+              dialog.close();
+              openLogin(app, "signup", account.email);
+            },
+          }),
+        ]),
     h("label", { class: "consent" }, [marketing, h("span", { text: t("Send me the newsletter and news about classes") })]),
     note,
     h("div", { class: "share-actions" }, [

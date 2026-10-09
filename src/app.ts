@@ -3279,11 +3279,21 @@ export class App implements CloudHost {
    */
   async login(email: string, password: string): Promise<void> {
     const here = new Set(listBoards().map((board) => board.id));
+    const blank = currentBoardId();
+    const blankIsEmpty = !this.boardDrawingCount(blank) && !getBoard(blank)?.room && !getBoard(blank)?.shareId;
     await loginAccount(email, password);
     await this.cloud.reconcile();
     const fromAccount = listBoards().filter((board) => !here.has(board.id) || board.cloudSynced || board.remote);
     const newest = fromAccount.find((board) => !here.has(board.id)) ?? fromAccount[0];
-    if (newest && newest.id !== currentBoardId()) this.openBoard(newest.id);
+    if (newest && newest.id !== currentBoardId()) {
+      this.openBoard(newest.id);
+      // The blank canvas this device started on would only sit in the list
+      // as a second "캔버스 1" beside the account's own.
+      if (blankIsEmpty && newest.id !== blank) {
+        deleteBoard(blank);
+        void this.cloud.deleted(blank);
+      }
+    }
     this.onMessage?.(t("Logged in"));
   }
 
@@ -3297,9 +3307,10 @@ export class App implements CloudHost {
     await this.cloud.idle();
     if (this.collab) this.disconnectRoom();
     const mine = listBoards().filter((board) => board.cloudSynced || board.remote);
+    const wasOpen = currentBoardId();
     disconnectCloud();
     for (const board of mine) deleteBoard(board.id);
-    if (!listBoards().length || mine.some((board) => board.id === currentBoardId())) {
+    if (!listBoards().length || mine.some((board) => board.id === wasOpen)) {
       const keep = listBoards()[0] ?? createBoard();
       setCurrentBoard(keep.id);
       const loaded = loadScene();
