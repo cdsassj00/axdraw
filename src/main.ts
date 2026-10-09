@@ -19,21 +19,10 @@ else if (!location.hash.startsWith("#cloud=")) void app.resumeRoom();
 
 // Cloud canvases: lists what other devices saved, uploads what is new here.
 // A #cloud=… link (from "open on another device") adopts that workspace first.
-const openedPlainly = !location.hash;
-void app.startCloud().then(async () => {
-  // A one-time sweep of the empty canvases and dead room links that piled up
-  // while those bugs were live. Only on a plain visit: a link someone just
-  // opened is never the moment to tidy around it.
-  const CLEANUP_FLAG = "axdraw:cleanup-v1";
-  try {
-    if (!openedPlainly || localStorage.getItem(CLEANUP_FLAG)) return;
-    const removed = await app.cleanupEmpty();
-    localStorage.setItem(CLEANUP_FLAG, String(Date.now()));
-    if (removed.canvases || removed.rooms) app.reportCleanup(removed);
-  } catch {
-    // Storage unavailable: nothing to tidy.
-  }
-});
+// The automatic one-time sweep of empty canvases is off: it removed
+// canvases that earlier bugs had already emptied, together with their cloud
+// copies, and with them any chance of recovering what was there.
+void app.startCloud();
 
 // Pasting a link into a tab that already has axdraw open only changes the
 // fragment, which is a same-document navigation: nothing reloads, so without
