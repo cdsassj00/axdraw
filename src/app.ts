@@ -3059,8 +3059,9 @@ export class App implements CloudHost {
         if (server === null || server > 0) continue;
         forgetRoom(board.room.id);
       }
+      // Never the cloud copy: a canvas empty here may still hold the work in
+      // the account, saved from another device.
       deleteBoard(board.id);
-      void this.cloud.deleted(board.id);
       canvases++;
     }
     let rooms = 0;
@@ -3082,7 +3083,6 @@ export class App implements CloudHost {
         this.openBoard(best.id);
         if (!getBoard(blank)?.room) {
           deleteBoard(blank);
-          void this.cloud.deleted(blank);
           canvases++;
         }
       }
