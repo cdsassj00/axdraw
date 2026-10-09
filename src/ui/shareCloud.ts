@@ -11,13 +11,7 @@
 import type { App } from "../app";
 import { t } from "../i18n";
 import { h } from "./dom";
-import {
-  cloudLink,
-  deleteCloudAccount,
-  disconnectCloud,
-  fetchAccount,
-  setMarketingConsent,
-} from "../scene/cloud";
+import { deleteCloudAccount, fetchAccount, setMarketingConsent } from "../scene/cloud";
 
 function modal(width: string, children: (Node | null)[]): { close: () => void } {
   const backdrop = h("div", { class: "modal-backdrop" });
@@ -62,6 +56,13 @@ export function openShareDialog(app: App): void {
                 type: "button",
                 text: t("Copy live link"),
                 onclick: () => void app.startCollab(),
+              }),
+              h("button", {
+                class: "secondary-btn share-gather",
+                type: "button",
+                text: t("Bring everyone to my view"),
+                title: t("Every participant's screen moves to what you are looking at, so nobody draws on top of someone else's work"),
+                onclick: () => app.gatherEveryone(),
               }),
               h("button", {
                 class: "secondary-btn",
@@ -121,72 +122,102 @@ export function openShareDialog(app: App): void {
 
 /** Status text for the chip beside the canvas name. */
 export function cloudChipLabel(app: App): { text: string; title: string; state: string } {
+  const who = app.cloud.account?.email ?? "";
   switch (app.cloud.status) {
     case "off":
-      return { text: t("☁ Save to cloud"), title: t("Only in this browser — leave an email to keep every canvas in the cloud, free"), state: "off" };
+      return { text: t("☁ Log in"), title: t("Log in with your email and every canvas is kept in your account, on any device"), state: "off" };
     case "saving":
-      return { text: t("☁ Saving…"), title: t("Saving to the cloud"), state: "saving" };
+      return { text: t("☁ Saving…"), title: who, state: "saving" };
     case "error":
       return { text: t("☁ Not saved"), title: app.cloud.lastError || t("Cloud saving failed"), state: "error" };
     default:
-      return { text: t("☁ Saved"), title: t("Every canvas is backed up to the cloud"), state: "saved" };
+      return { text: t("☁ Saved"), title: who, state: "saved" };
   }
 }
 
 export function openCloudDialog(app: App): void {
   if (app.cloud.account) openCloudAccount(app);
-  else openCloudSignup(app);
+  else openLogin(app, "login");
 }
 
 const PRIVACY_TERMS = [
   "Collected: email address",
-  "Purpose: identifying your cloud storage, and notices about the service (outages, changes)",
-  "Kept until: you delete your cloud data",
-  "You may decline; cloud saving then stays off, and saving in this browser keeps working.",
+  "Purpose: your account, and notices about the service (outages, changes)",
+  "Kept until: you delete your account",
+  "You may decline; you can then still draw, saved in this browser only.",
 ];
 
 const MARKETING_TERMS = [
   "Collected: email address",
   "Purpose: CDSA newsletter, classes and events",
-  "Kept until: you withdraw (from this same window, at any time)",
-  "Declining does not affect cloud saving.",
+  "Kept until: you withdraw (from the account window, at any time)",
+  "Declining does not affect your account.",
 ];
 
 function terms(lines: string[]): HTMLElement {
   return h("ul", { class: "consent-terms" }, lines.map((line) => h("li", { text: t(line) })));
 }
 
-function openCloudSignup(app: App): void {
-  const email = h("input", {
-    class: "cloud-email",
-    type: "email",
+/**
+ * Log in, or sign up. One window, two modes: the email and password are the
+ * whole of it, so that "open my drawings on this computer" is the same act
+ * everywhere — the way any other online service works.
+ */
+function openLogin(app: App, mode: "login" | "signup"): void {
+  const email = h("input", { class: "cloud-email", type: "email", required: true, autocomplete: "email", placeholder: "name@example.com" });
+  const password = h("input", {
+    class: "cloud-password",
+    type: "password",
     required: true,
-    autocomplete: "email",
-    placeholder: "name@example.com",
+    minlength: "6",
+    autocomplete: mode === "login" ? "current-password" : "new-password",
+    placeholder: t("Password (6+ characters)"),
   });
+  const confirm = h("input", { class: "cloud-password-confirm", type: "password", autocomplete: "new-password", placeholder: t("Password again") });
   const privacy = h("input", { type: "checkbox", class: "consent-privacy" });
   const marketing = h("input", { type: "checkbox", class: "consent-marketing" });
   const error = h("p", { class: "cloud-error" });
-  const submit = h("button", { class: "primary-btn cloud-submit", type: "submit", text: t("Save to cloud for free") });
-
+  const submit = h("button", {
+    class: "primary-btn cloud-submit",
+    type: "submit",
+    text: mode === "login" ? t("Log in") : t("Sign up and save my canvases"),
+  });
+  const signupOnly = mode === "signup"
+    ? [
+        confirm,
+        h("label", { class: "consent" }, [privacy, h("span", { text: t("[Required] I agree to the collection and use of my personal information") })]),
+        terms(PRIVACY_TERMS),
+        h("label", { class: "consent" }, [marketing, h("span", { text: t("[Optional] Send me the newsletter and news about classes") })]),
+        terms(MARKETING_TERMS),
+      ]
+    : [];
   const form = h("form", { class: "cloud-form" }, [
     h("label", { class: "cloud-label", text: t("Email") }),
     email,
-    h("label", { class: "consent" }, [privacy, h("span", { text: t("[Required] I agree to the collection and use of my personal information") })]),
-    terms(PRIVACY_TERMS),
-    h("label", { class: "consent" }, [marketing, h("span", { text: t("[Optional] Send me the newsletter and news about classes") })]),
-    terms(MARKETING_TERMS),
+    h("label", { class: "cloud-label", text: t("Password") }),
+    password,
+    ...signupOnly,
     error,
     submit,
   ]);
+  const swap = h("button", {
+    class: "link-btn cloud-swap",
+    type: "button",
+    text: mode === "login" ? t("New here? Create an account") : t("Already have an account? Log in"),
+    onclick: () => {
+      dialog.close();
+      openLogin(app, mode === "login" ? "signup" : "login");
+    },
+  });
 
-  const dialog = modal("min(480px, 100%)", [
-    h("div", { class: "modal-header" }, [h("h2", { text: t("Keep every canvas in the cloud") })]),
+  const dialog = modal("min(440px, 100%)", [
+    h("div", { class: "modal-header" }, [h("h2", { text: mode === "login" ? t("Log in") : t("Create an account") })]),
     h("p", {
       class: "rooms-note",
-      text: t("Right now your canvases live only in this browser: clearing it, or switching computers, loses them. Leave an email and every canvas is saved to the cloud — free. Drawings are encrypted in your browser first; not even the operator can open them."),
+      text: t("Log in with the same email on any computer or phone and all your canvases are there — including the live rooms you joined."),
     }),
     form,
+    swap,
   ]);
 
   form.addEventListener("submit", async (event) => {
@@ -196,13 +227,24 @@ function openCloudSignup(app: App): void {
       error.textContent = t("Please enter a valid email address");
       return;
     }
-    if (!privacy.checked) {
-      error.textContent = t("The required consent is needed to save to the cloud");
+    if (password.value.length < 6) {
+      error.textContent = t("The password needs at least 6 characters");
       return;
+    }
+    if (mode === "signup") {
+      if (confirm.value !== password.value) {
+        error.textContent = t("The two passwords do not match");
+        return;
+      }
+      if (!privacy.checked) {
+        error.textContent = t("The required consent is needed to create an account");
+        return;
+      }
     }
     submit.disabled = true;
     try {
-      await app.enableCloud(email.value, { privacy: true, marketing: marketing.checked });
+      if (mode === "login") await app.login(email.value, password.value);
+      else await app.signup(email.value, password.value, { privacy: true, marketing: marketing.checked });
       dialog.close();
     } catch (failure) {
       error.textContent = failure instanceof Error ? t(failure.message) : String(failure);
@@ -215,7 +257,6 @@ function openCloudSignup(app: App): void {
 function openCloudAccount(app: App): void {
   const account = app.cloud.account;
   if (!account) return;
-  const chip = cloudChipLabel(app);
   const marketing = h("input", { type: "checkbox", class: "consent-marketing", disabled: true });
   const note = h("p", { class: "cloud-error" });
   const emailText = h("strong", { text: account.email || "…" });
@@ -241,49 +282,36 @@ function openCloudAccount(app: App): void {
     marketing.disabled = false;
   });
 
-  const dialog = modal("min(480px, 100%)", [
-    h("div", { class: "modal-header" }, [h("h2", { text: t("Cloud saving") })]),
-    h("p", { class: "cloud-status" }, [t("Signed up as "), emailText, ` · ${chip.title}`]),
-    h("div", { class: "share-option" }, [
-      h("h3", { text: t("Open on another device") }),
-      h("p", {
-        class: "rooms-note",
-        text: t("Open this link on your other computer or tablet to see the same canvases. Anyone with it can open all of them — keep it to yourself."),
-      }),
-      h("button", {
-        class: "secondary-btn cloud-copy-link",
-        type: "button",
-        text: t("Copy my canvases link"),
-        onclick: () => {
-          void navigator.clipboard.writeText(cloudLink(account));
-          app.onMessage?.(t("Link copied — open it on your other device"));
-        },
-      }),
-    ]),
+  const dialog = modal("min(440px, 100%)", [
+    h("div", { class: "modal-header" }, [h("h2", { text: t("My account") })]),
+    h("p", { class: "cloud-status" }, [emailText, ` · ${cloudChipLabel(app).text}`]),
+    h("p", {
+      class: "rooms-note",
+      text: t("Every canvas, including live rooms you joined, is saved to this account. Log in with this email on another device to open them there."),
+    }),
     h("label", { class: "consent" }, [marketing, h("span", { text: t("Send me the newsletter and news about classes") })]),
     note,
     h("div", { class: "share-actions" }, [
       h("button", {
-        class: "secondary-btn",
+        class: "primary-btn cloud-logout",
         type: "button",
-        text: t("Disconnect this browser"),
-        title: t("Stops saving from this browser. Canvases stay in the cloud and here."),
-        onclick: () => {
-          disconnectCloud();
-          void app.cloud.reconcile();
+        text: t("Log out"),
+        title: t("On a shared computer, log out: your canvases are removed from this device and stay in your account."),
+        onclick: async () => {
+          await app.logout();
           dialog.close();
         },
       }),
       h("button", {
         class: "secondary-btn danger-btn",
         type: "button",
-        text: t("Delete all cloud data"),
+        text: t("Delete account"),
         onclick: async () => {
-          if (!window.confirm(t("Delete every canvas saved in the cloud, and your email? Canvases in this browser are kept."))) return;
+          if (!window.confirm(t("Delete your account, your email and every canvas saved in it? Canvases in this browser are kept."))) return;
           try {
             await deleteCloudAccount(account);
             await app.cloud.reconcile();
-            app.onMessage?.(t("Cloud data deleted"));
+            app.onMessage?.(t("Account deleted"));
             dialog.close();
           } catch (failure) {
             note.textContent = failure instanceof Error ? t(failure.message) : String(failure);

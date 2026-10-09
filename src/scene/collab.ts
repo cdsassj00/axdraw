@@ -46,6 +46,7 @@ type Message =
   | { t: "scene"; from: string; elements: AxElement[]; files: BinaryFiles }
   | { t: "cursor"; from: string; x: number; y: number }
   | { t: "hello"; from: string }
+  | { t: "view"; from: string; x1: number; y1: number; x2: number; y2: number }
   | { t: "bye"; from: string };
 
 interface RemoteCursor {
@@ -371,6 +372,11 @@ export class CollabSession {
     this.queueSave();
   }
 
+  /** Moves everyone else's view to this area of the canvas. */
+  shareView(bounds: { x1: number; y1: number; x2: number; y2: number }): void {
+    void this.send({ t: "view", from: this.selfId, ...bounds });
+  }
+
   private sendCursor(event: PointerEvent): void {
     const now = performance.now();
     if (now - this.lastCursorSent < CURSOR_THROTTLE_MS) return;
@@ -414,6 +420,11 @@ export class CollabSession {
         break;
       case "cursor":
         this.updateCursor(message.from, message.x, message.y);
+        break;
+      case "view":
+        // Someone gathered the room to what they are looking at.
+        this.cancelFraming();
+        this.app.showArea(message);
         break;
       case "hello":
         this.app.onMessage?.(t("A collaborator joined"));
@@ -481,5 +492,23 @@ export class CollabSession {
     if (ROOM_HASH_PATTERN.test(location.hash)) {
       history.replaceState(null, "", location.pathname + location.search);
     }
+  }
+}
+
+/**
+ * How many live elements a room has saved on the server. null when that
+ * cannot be told — offline, a server error — so callers never treat "could
+ * not check" as "empty" and delete something that has a drawing.
+ */
+export async function roomDrawingCount(roomId: string, keyText: string): Promise<number | null> {
+  try {
+    const response = await fetch(`${API_BASE}/api/rooms/${roomId}/scene`, { cache: "no-store" });
+    if (response.status === 404) return 0;
+    if (!response.ok) return null;
+    const key = await importAesKey(fromBase64Url(keyText));
+    const scene = await decryptJson<{ elements?: AxElement[] }>(key, await response.arrayBuffer());
+    return (scene.elements ?? []).filter((element) => !element.isDeleted).length;
+  } catch {
+    return null;
   }
 }

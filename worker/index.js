@@ -186,8 +186,11 @@ async function putRoomScene(env, id, body) {
 async function getRoomScene(env, id) {
   if (env.ROOM_SCENES) {
     const object = await env.ROOM_SCENES.get(`room/${id}`);
-    return object ? await object.arrayBuffer() : null;
+    if (object) return object.arrayBuffer();
   }
+  // Rooms saved while scenes still went to KV (before the R2 bucket was
+  // bound) live only there. Reading R2 alone made every one of them open as
+  // an empty room, even in the browser that drew it.
   return env.SCENES.get(`room:${id}`, { type: "arrayBuffer" });
 }
 
@@ -248,15 +251,42 @@ const SCHEMA = [
      PRIMARY KEY (workspace_id, id)
    )`,
   `CREATE INDEX IF NOT EXISTS workspaces_email ON workspaces (email)`,
+  `CREATE TABLE IF NOT EXISTS accounts (
+     email TEXT PRIMARY KEY,
+     salt TEXT NOT NULL,
+     pw_hash TEXT,
+     workspace_id TEXT NOT NULL,
+     created_at INTEGER NOT NULL,
+     failed INTEGER NOT NULL DEFAULT 0,
+     locked_until INTEGER NOT NULL DEFAULT 0
+   )`,
 ];
+
+// Columns added after the first deploy. SQLite has no ADD COLUMN IF NOT
+// EXISTS, so each runs on its own and "duplicate column" means it is done.
+const MIGRATIONS = [`ALTER TABLE workspaces ADD COLUMN secret TEXT`];
 
 let schemaReady = null;
 function ensureSchema(db) {
   // Once per isolate. A failure is not cached, so the next request retries.
-  schemaReady ??= db.batch(SCHEMA.map((sql) => db.prepare(sql))).catch((error) => {
-    schemaReady = null;
-    throw error;
-  });
+  schemaReady ??= db
+    .batch(SCHEMA.map((sql) => db.prepare(sql)))
+    .then(() =>
+      Promise.all(
+        MIGRATIONS.map((sql) =>
+          db
+            .prepare(sql)
+            .run()
+            .catch((error) => {
+              if (!/duplicate column/i.test(String(error))) throw error;
+            }),
+        ),
+      ),
+    )
+    .catch((error) => {
+      schemaReady = null;
+      throw error;
+    });
   return schemaReady;
 }
 
@@ -312,6 +342,116 @@ async function handleCloud(request, env, url) {
   if (!env.DB) return json({ error: "cloud storage is not configured" }, 503);
   await ensureSchema(env.DB);
   const now = Date.now();
+
+  /* ---- Accounts: email + password, so any device can open your canvases ----
+   *
+   * The password never reaches the server. The browser stretches it with
+   * PBKDF2 (200,000 rounds, salted with the email) into an "auth key" and
+   * sends that; the server stores a salted SHA-256 of the auth key. A leaked
+   * table costs an attacker the full PBKDF2 work per guess, while each login
+   * costs this Worker one cheap hash — PBKDF2 here would blow the CPU limit.
+   *
+   * What a login hands back is the account's workspace: the same id and
+   * secret a "my canvases" link used to carry, now kept server-side so that
+   * typing your email and password is all another device needs.
+   */
+  if (url.pathname === "/api/account/signup" && request.method === "POST") {
+    const body = await request.json().catch(() => ({}));
+    const { email, authKey, privacy, marketing, workspace: existing, fresh: freshWorkspace } = body;
+    const address = typeof email === "string" ? email.trim().toLowerCase() : "";
+    if (!EMAIL_PATTERN.test(address) || address.length > 254) return json({ error: "invalid email" }, 400);
+    if (privacy !== true) return json({ error: "privacy consent is required" }, 400);
+    if (typeof authKey !== "string" || !/^[A-Za-z0-9_-]{40,60}$/.test(authKey)) return json({ error: "invalid password" }, 400);
+    const known = await env.DB.prepare("SELECT pw_hash FROM accounts WHERE email = ?").bind(address).first();
+    // A row without a password is one the operator reset: signing up again
+    // sets a new password on the same workspace.
+    if (known?.pw_hash) return json({ error: "already registered" }, 409);
+
+    // Keep what this browser already saved: a workspace from the earlier,
+    // link-based cloud saving is adopted when its credentials check out.
+    let workspace = null;
+    let secret = null;
+    if (existing && typeof existing.id === "string" && typeof existing.secret === "string" && typeof existing.token === "string") {
+      const row = await env.DB.prepare("SELECT id, token_hash FROM workspaces WHERE id = ?").bind(existing.id).first();
+      if (row && sameDigest(row.token_hash, await sha256Hex(existing.token))) {
+        workspace = row.id;
+        secret = existing.secret;
+      }
+    }
+    const previous = await env.DB.prepare("SELECT workspace_id FROM accounts WHERE email = ?").bind(address).first();
+    if (!workspace && previous) {
+      const row = await env.DB.prepare("SELECT id, secret FROM workspaces WHERE id = ?").bind(previous.workspace_id).first();
+      if (row?.secret) {
+        workspace = row.id;
+        secret = row.secret;
+      }
+    }
+    const statements = [];
+    if (!workspace) {
+      const { secret: fresh, token } = freshWorkspace ?? {};
+      if (typeof fresh !== "string" || !/^[A-Za-z0-9_-]{40,60}$/.test(fresh) || typeof token !== "string") {
+        return json({ error: "invalid request" }, 400);
+      }
+      workspace = randomId(16);
+      secret = fresh;
+      statements.push(
+        env.DB.prepare(
+          "INSERT INTO workspaces (id, token_hash, email, created_at, last_seen, secret) VALUES (?, ?, ?, ?, ?, ?)",
+        ).bind(workspace, await sha256Hex(token), address, now, now, secret),
+      );
+    } else {
+      statements.push(
+        env.DB.prepare("UPDATE workspaces SET secret = ?, email = ? WHERE id = ?").bind(secret, address, workspace),
+      );
+    }
+    const salt = randomId(24);
+    const optIn = marketing === true ? 1 : 0;
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO accounts (email, salt, pw_hash, workspace_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(email) DO UPDATE SET salt = ?2, pw_hash = ?3, workspace_id = ?4, failed = 0, locked_until = 0`,
+      ).bind(address, salt, await sha256Hex(`${salt}:${authKey}`), workspace, now),
+      env.DB.prepare(
+        `INSERT INTO leads (email, privacy_consent_at, marketing_consent, marketing_consent_at, consent_version, source, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'account', ?2, ?2)
+         ON CONFLICT(email) DO UPDATE SET
+           privacy_consent_at = ?2,
+           marketing_consent = CASE WHEN ?3 = 1 THEN 1 ELSE leads.marketing_consent END,
+           marketing_consent_at = CASE WHEN ?3 = 1 THEN ?2 ELSE leads.marketing_consent_at END,
+           consent_version = ?5,
+           updated_at = ?2`,
+      ).bind(address, now, optIn, optIn ? now : null, CONSENT_VERSION),
+    );
+    await env.DB.batch(statements);
+    return json({ workspace, secret });
+  }
+
+  if (url.pathname === "/api/account/login" && request.method === "POST") {
+    const { email, authKey } = await request.json().catch(() => ({}));
+    const address = typeof email === "string" ? email.trim().toLowerCase() : "";
+    if (!address || typeof authKey !== "string") return json({ error: "wrong email or password" }, 401);
+    const account = await env.DB.prepare(
+      "SELECT salt, pw_hash, workspace_id, failed, locked_until FROM accounts WHERE email = ?",
+    )
+      .bind(address)
+      .first();
+    if (!account?.pw_hash) return json({ error: "wrong email or password" }, 401);
+    if (account.locked_until > now) return json({ error: "too many attempts" }, 429);
+    if (!sameDigest(account.pw_hash, await sha256Hex(`${account.salt}:${authKey}`))) {
+      const failed = account.failed + 1;
+      // Ten wrong passwords in a row lock the account for fifteen minutes.
+      await env.DB.prepare("UPDATE accounts SET failed = ?, locked_until = ? WHERE email = ?")
+        .bind(failed >= 10 ? 0 : failed, failed >= 10 ? now + 15 * 60 * 1000 : 0, address)
+        .run();
+      return json({ error: "wrong email or password" }, 401);
+    }
+    const workspace = await env.DB.prepare("SELECT id, secret FROM workspaces WHERE id = ?")
+      .bind(account.workspace_id)
+      .first();
+    if (!workspace?.secret) return json({ error: "account has no workspace" }, 500);
+    await env.DB.prepare("UPDATE accounts SET failed = 0, locked_until = 0 WHERE email = ?").bind(address).run();
+    return json({ workspace: workspace.id, secret: workspace.secret });
+  }
 
   if (url.pathname === "/api/cloud/register" && request.method === "POST") {
     const { email, privacy, marketing, token, source } = await request.json().catch(() => ({}));
@@ -374,6 +514,7 @@ async function handleCloud(request, env, url) {
     await env.DB.batch([
       env.DB.prepare("DELETE FROM canvases WHERE workspace_id = ?").bind(account.id),
       env.DB.prepare("DELETE FROM workspaces WHERE id = ?").bind(account.id),
+      env.DB.prepare("DELETE FROM accounts WHERE workspace_id = ?").bind(account.id),
       env.DB.prepare(
         "DELETE FROM leads WHERE email = ? AND NOT EXISTS (SELECT 1 FROM workspaces WHERE email = ?)",
       ).bind(account.email, account.email),
@@ -686,7 +827,7 @@ export default {
         return json({ reply });
       }
 
-      if (url.pathname.startsWith("/api/cloud/")) {
+      if (url.pathname.startsWith("/api/cloud/") || url.pathname.startsWith("/api/account/")) {
         try {
           return await handleCloud(request, env, url);
         } catch (error) {

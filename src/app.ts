@@ -134,6 +134,7 @@ import {
   findBoardByRoom,
   findBoardByShare,
   getBoard,
+  readBoardScene,
   listBoards,
   loadScene,
   renameBoard,
@@ -143,12 +144,12 @@ import {
   type BoardMeta,
 } from "./scene/storage";
 import { createShareLink, loadSharedScene, shareIdFromHash } from "./scene/share";
-import { CollabSession, ROOM_HASH_PATTERN } from "./scene/collab";
+import { CollabSession, ROOM_HASH_PATTERN, roomDrawingCount } from "./scene/collab";
 import { CloudSync, type CloudHost } from "./scene/cloudSync";
-import { adoptCloudFromHash, registerCloud } from "./scene/cloud";
+import { adoptCloudFromHash, disconnectCloud, loginAccount, registerCloud, signupAccount } from "./scene/cloud";
 import { mergeElements } from "./scene/merge";
 import { findLinkInText, getLinkBadgeAt, normalizeLink, openLink } from "./element/links";
-import { renameRecentRoom, roomBoardId, setRoomBoard } from "./scene/recentRooms";
+import { forgetRoom, listRecentRooms, renameRecentRoom, roomBoardId, setRoomBoard } from "./scene/recentRooms";
 import { t } from "./i18n";
 import type {
   AppState,
@@ -3025,6 +3026,79 @@ export class App implements CloudHost {
     this.notify();
   }
 
+  /** Live elements on a board, whether or not it is the one open. */
+  boardDrawingCount(id: string): number {
+    const elements = id === currentBoardId() ? this.elements : readBoardScene(id).elements;
+    return elements.filter((element) => !element.isDeleted).length;
+  }
+
+  /**
+   * Removes every canvas and room link with nothing drawn in it.
+   *
+   * Months of bugs left a trail of empty canvases ("협업 …" duplicates, blank
+   * "캔버스 N") and room links whose rooms hold nothing, burying the canvases
+   * that matter. A canvas tied to a room is kept if the room has a drawing on
+   * the server, even when this browser's copy is empty: opening it downloads
+   * the drawing. Anything that cannot be checked (offline) is kept. The open
+   * canvas and a room you are in are never removed.
+   */
+  async cleanupEmpty(): Promise<{ canvases: number; rooms: number }> {
+    const counts = new Map<string, number | null>();
+    const serverCount = async (room: { id: string; key: string }): Promise<number | null> => {
+      if (!counts.has(room.id)) counts.set(room.id, await roomDrawingCount(room.id, room.key));
+      return counts.get(room.id) ?? null;
+    };
+    const current = currentBoardId();
+    let canvases = 0;
+    for (const board of listBoards()) {
+      if (board.id === current || board.remote) continue;
+      if (this.boardDrawingCount(board.id) > 0) continue;
+      if (board.room) {
+        if (board.room.id === this.collab?.id) continue;
+        const server = await serverCount(board.room);
+        if (server === null || server > 0) continue;
+        forgetRoom(board.room.id);
+      }
+      deleteBoard(board.id);
+      void this.cloud.deleted(board.id);
+      canvases++;
+    }
+    let rooms = 0;
+    const boardRooms = new Set(listBoards().map((board) => board.room?.id).filter(Boolean));
+    for (const room of listRecentRooms()) {
+      if (boardRooms.has(room.id) || room.id === this.collab?.id) continue;
+      if (room.boardId && this.boardDrawingCount(room.boardId) > 0) continue;
+      const server = await serverCount(room);
+      if (server === 0) {
+        forgetRoom(room.id);
+        rooms++;
+      }
+    }
+    // Landing on a blank canvas after a cleanup reads as "everything is gone".
+    if (!this.boardDrawingCount(currentBoardId()) && !this.collab) {
+      const best = listBoards().find((board) => board.id !== currentBoardId() && (board.remote || this.boardDrawingCount(board.id) > 0));
+      if (best) {
+        const blank = currentBoardId();
+        this.openBoard(best.id);
+        if (!getBoard(blank)?.room) {
+          deleteBoard(blank);
+          void this.cloud.deleted(blank);
+          canvases++;
+        }
+      }
+    }
+    this.notify();
+    return { canvases, rooms };
+  }
+
+  reportCleanup(removed: { canvases: number; rooms: number }): void {
+    this.onMessage?.(
+      t("Removed {canvases} empty canvases and {rooms} empty room links")
+        .replace("{canvases}", String(removed.canvases))
+        .replace("{rooms}", String(removed.rooms)),
+    );
+  }
+
   /** Saves the current board and opens a fresh empty one. */
   newBoard(): void {
     saveScene(this.elements, this.files, this.state);
@@ -3192,6 +3266,58 @@ export class App implements CloudHost {
     this.onMessage?.(t("Cloud saving is on — every canvas is now backed up"));
   }
 
+  /** Creates an account; this browser's canvases go up into it. */
+  async signup(email: string, password: string, consent: { privacy: boolean; marketing: boolean }): Promise<void> {
+    await signupAccount(email, password, consent);
+    await this.cloud.reconcile();
+    this.onMessage?.(t("Signed up — your canvases are saved to your account"));
+  }
+
+  /**
+   * Logs in: the account's canvases appear in the list, and the most recent
+   * one opens — on a new device that is the whole point of logging in.
+   */
+  async login(email: string, password: string): Promise<void> {
+    const here = new Set(listBoards().map((board) => board.id));
+    await loginAccount(email, password);
+    await this.cloud.reconcile();
+    const fromAccount = listBoards().filter((board) => !here.has(board.id) || board.cloudSynced || board.remote);
+    const newest = fromAccount.find((board) => !here.has(board.id)) ?? fromAccount[0];
+    if (newest && newest.id !== currentBoardId()) this.openBoard(newest.id);
+    this.onMessage?.(t("Logged in"));
+  }
+
+  /**
+   * Logs out of this device. The account's canvases are in the cloud, so their
+   * copies here are removed — on a shared classroom computer the next person
+   * must not find them. Canvases never saved to the account stay.
+   */
+  async logout(): Promise<void> {
+    this.cloud.flush();
+    await this.cloud.idle();
+    if (this.collab) this.disconnectRoom();
+    const mine = listBoards().filter((board) => board.cloudSynced || board.remote);
+    disconnectCloud();
+    for (const board of mine) deleteBoard(board.id);
+    if (!listBoards().length || mine.some((board) => board.id === currentBoardId())) {
+      const keep = listBoards()[0] ?? createBoard();
+      setCurrentBoard(keep.id);
+      const loaded = loadScene();
+      this.elements = (loaded?.elements ?? []).map((element) =>
+        normalizeImportedElement(element as unknown as Record<string, unknown>),
+      );
+      this.files = loaded?.files ?? {};
+      this.state.selectedIds = new Set();
+      this.history.reset(this.elements, this.state.selectedIds);
+      clearShapeCache();
+      clearImageCache();
+      this.scheduleRender();
+    }
+    await this.cloud.reconcile();
+    this.onMessage?.(t("Logged out — your canvases were removed from this device"));
+    this.notify();
+  }
+
   /* ---------------------------------------------------------------- *
    * Live collaboration
    * ---------------------------------------------------------------- */
@@ -3230,6 +3356,46 @@ export class App implements CloudHost {
     setBoardLink(currentBoardId(), { room: undefined });
     this.onMessage?.(t("Left the collaboration room"));
     this.notify();
+  }
+
+  /**
+   * Brings everyone in the room to what this screen shows. On an infinite
+   * canvas each person draws wherever their own view happens to be, so a class
+   * ends up drawing on top of each other's work without seeing it; one press
+   * puts every participant on the same area.
+   */
+  gatherEveryone(): void {
+    if (!this.collab) return;
+    const { zoom, scrollX, scrollY } = this.state;
+    const x1 = -scrollX;
+    const y1 = -scrollY;
+    this.collab.shareView({
+      x1,
+      y1,
+      x2: x1 + this.container.clientWidth / zoom,
+      y2: y1 + this.container.clientHeight / zoom,
+    });
+    this.onMessage?.(t("Everyone in the room now sees this area"));
+  }
+
+  /** A collaborator gathered the room: show the area they are looking at. */
+  showArea(bounds: { x1: number; y1: number; x2: number; y2: number }): void {
+    this.zoomToBounds(bounds);
+    this.notify();
+    this.onMessage?.(t("Moved to the area a collaborator is showing"));
+  }
+
+  /** Mid-stroke, mid-drag or typing: not a moment to reload under the user. */
+  isBusy(): boolean {
+    return this.pointerMode.type !== "none" || this.textEditor.isEditing || this.activePointers.size > 0;
+  }
+
+  /** Writes everything out now — the canvas, the room, the cloud copy. */
+  saveNow(): void {
+    if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    saveScene(this.elements, this.files, this.state);
+    this.cloud.flush();
   }
 
   /** Leaves the room without forgetting that this canvas belongs to it. */
