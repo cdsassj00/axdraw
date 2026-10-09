@@ -390,7 +390,10 @@ export class CollabSession {
 
   private async send(message: Message): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.key) return;
-    this.ws.send(await encryptJson(this.key, message));
+    const frame = await encryptJson(this.key, message);
+    // Encrypting takes a moment, and the socket can close in between — on
+    // leaving the room, say. Sending then only earns a console warning.
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(frame);
   }
 
   private async receive(data: ArrayBuffer): Promise<void> {

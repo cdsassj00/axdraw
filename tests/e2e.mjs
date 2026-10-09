@@ -69,6 +69,9 @@ try {
     // static build with no relay behind it, so the handshake for that one
     // test room is expected to fail. Any other room id is a real error.
     if (message.text().includes("/api/rooms/e2eroom000001/ws")) return;
+    // A room nobody has saved yet answers 404 by design, and the browser logs
+    // the response; against a deployed site the test rooms really are empty.
+    if (/\/api\/rooms\/[A-Za-z0-9]+\/scene/.test(url) && message.text().includes("404")) return;
     if (message.type() === "error") errors.push(message.text());
   });
 
