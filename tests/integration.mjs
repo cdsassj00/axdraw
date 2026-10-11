@@ -687,6 +687,19 @@ try {
       JSON.parse(localStorage.getItem("axdraw:rooms") || "[]").filter((r) => !r.deleted).map((r) => r.id),
     );
     check("the room list follows the login to another device", tabletRooms.includes(laptopRoom), JSON.stringify(tabletRooms));
+    // And the room's canvas, opened there, joins the room again.
+    const roomCanvas = await tabPage.evaluate(
+      (id) => JSON.parse(localStorage.getItem("axdraw:rooms")).find((r) => r.id === id)?.boardId,
+      laptopRoom,
+    );
+    const back = await tabPage.evaluate(() => window.axdraw.currentBoardId());
+    await tabPage.evaluate((id) => window.axdraw.openBoard(id), roomCanvas);
+    await tabPage.waitForFunction((id) => window.axdraw.collab?.id === id, laptopRoom, { timeout: 15000 }).catch(() => undefined);
+    check(
+      "a room canvas opened on another device rejoins its room",
+      (await tabPage.evaluate(() => window.axdraw.collab?.id)) === laptopRoom,
+    );
+    await tabPage.evaluate((id) => window.axdraw.openBoard(id), back);
   }
 
   // Both devices edit the same canvas without seeing each other's save.

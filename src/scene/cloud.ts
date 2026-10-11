@@ -272,7 +272,11 @@ export async function pullCloudCanvas(
   if (!response.ok) throw await failure(response, "Could not load the canvas from the cloud");
   const scene = await decryptJson<CloudScene>(await keyFor(account.secret), await response.arrayBuffer());
   return {
-    scene: { elements: Array.isArray(scene.elements) ? scene.elements : [], files: scene.files ?? {} },
+    // Everything that was saved comes back — not only the drawing. Rebuilding
+    // the object from elements and files alone silently dropped the rest: a
+    // room canvas lost its room link on every other device, and the account's
+    // room list arrived empty.
+    scene: { ...scene, elements: Array.isArray(scene.elements) ? scene.elements : [], files: scene.files ?? {} },
     updated: Number(response.headers.get("x-canvas-updated") ?? 0),
   };
 }
