@@ -499,7 +499,7 @@ try {
   const removed = await tPage2.evaluate(() => window.axdraw.cleanupEmpty());
   const tidied = await tPage2.evaluate(() => ({
     boards: window.axdraw.listBoards().map((b) => b.id),
-    rooms: JSON.parse(localStorage.getItem("axdraw:rooms")).map((r) => r.name),
+    rooms: JSON.parse(localStorage.getItem("axdraw:rooms")).filter((r) => !r.deleted).map((r) => r.name),
     open: window.axdraw.currentBoardId(),
   }));
   check(
