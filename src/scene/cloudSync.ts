@@ -21,6 +21,7 @@ import {
   type CloudScene,
 } from "./cloud";
 import { mergeElements, sceneSignature } from "./merge";
+import { ROOMS_CHANGED, allRoomRecords, mergeRoomRecords, type RoomMeta } from "./recentRooms";
 import {
   addBoard,
   getBoard,
@@ -33,6 +34,14 @@ import {
 } from "./storage";
 
 const PUSH_DELAY_MS = 2500;
+
+/**
+ * The account's list of live rooms, stored beside its canvases under a name no
+ * canvas can have. Before this the list lived in each browser alone: logging in
+ * elsewhere brought the canvases but not the rooms.
+ */
+const ROOMS_RECORD = "_rooms";
+const ROOMS_SYNCED_KEY = "axdraw:rooms-synced";
 
 export type CloudStatus = "off" | "saving" | "saved" | "error";
 
@@ -59,7 +68,12 @@ export class CloudSync {
   private again = new Set<string>();
   private signatures = new Map<string, string>();
 
-  constructor(private readonly host: CloudHost) {}
+  private roomsTimer: number | null = null;
+  private roomsSignature = "";
+
+  constructor(private readonly host: CloudHost) {
+    window.addEventListener(ROOMS_CHANGED, () => this.roomsChanged());
+  }
 
   get account(): CloudAccount | null {
     return cloudAccount();
@@ -90,6 +104,8 @@ export class CloudSync {
       return;
     }
     const seen = new Set<string>();
+    const roomsRecord = remote.find((canvas) => canvas.id === ROOMS_RECORD);
+    remote = remote.filter((canvas) => !canvas.id.startsWith("_"));
     for (const canvas of remote) {
       seen.add(canvas.id);
       const local = getBoard(canvas.id);
@@ -114,7 +130,80 @@ export class CloudSync {
         await this.push(board.id, true);
       }
     }
+    await this.syncRooms(roomsRecord?.updated ?? 0);
     if (this.status !== "error") this.setStatus("saved");
+  }
+
+  private roomsSynced(): number {
+    try {
+      return Number(localStorage.getItem(ROOMS_SYNCED_KEY) ?? 0);
+    } catch {
+      return 0;
+    }
+  }
+
+  private setRoomsSynced(version: number): void {
+    try {
+      localStorage.setItem(ROOMS_SYNCED_KEY, String(version));
+    } catch {
+      // Storage unavailable: the next sync merges again, which is harmless.
+    }
+  }
+
+  /** The room list changed here; save it to the account shortly. */
+  roomsChanged(): void {
+    if (!this.account) return;
+    if (this.roomsTimer !== null) window.clearTimeout(this.roomsTimer);
+    this.roomsTimer = window.setTimeout(() => {
+      this.roomsTimer = null;
+      void this.syncRooms(0, true);
+    }, 1500);
+  }
+
+  /**
+   * Brings this browser's room list and the account's together: pull the
+   * account copy when it is newer, merge room by room, and save the union if
+   * this side had anything the account lacked.
+   */
+  private async syncRooms(remoteVersion: number, local = false): Promise<void> {
+    const account = this.account;
+    if (!account) return;
+    try {
+      if (remoteVersion > this.roomsSynced() || local) {
+        const pulled = await pullCloudCanvas(account, ROOMS_RECORD);
+        if (pulled) {
+          const rooms = (pulled.scene as CloudScene & { rooms?: RoomMeta[] }).rooms ?? [];
+          if (mergeRoomRecords(rooms)) this.host.onCloudChanged();
+          this.setRoomsSynced(pulled.updated);
+        }
+      }
+      const records = allRoomRecords();
+      const signature = JSON.stringify(records);
+      if (!records.length || signature === this.roomsSignature) return;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const updated = await pushCloudCanvas(
+            account,
+            ROOMS_RECORD,
+            "rooms",
+            { elements: [], files: {}, rooms: allRoomRecords() } as CloudScene,
+            this.roomsSynced(),
+          );
+          this.setRoomsSynced(updated);
+          this.roomsSignature = JSON.stringify(allRoomRecords());
+          return;
+        } catch (error) {
+          if (!(error instanceof CloudConflict)) throw error;
+          const pulled = await pullCloudCanvas(account, ROOMS_RECORD);
+          if (pulled) {
+            mergeRoomRecords((pulled.scene as CloudScene & { rooms?: RoomMeta[] }).rooms ?? []);
+            this.setRoomsSynced(pulled.updated);
+          }
+        }
+      }
+    } catch {
+      // Offline or a server hiccup: the list stays here and goes up next time.
+    }
   }
 
   /** The open canvas changed; save it shortly. */

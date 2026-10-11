@@ -149,7 +149,7 @@ import { CloudSync, type CloudHost } from "./scene/cloudSync";
 import { adoptCloudFromHash, disconnectCloud, loginAccount, registerCloud, signupAccount } from "./scene/cloud";
 import { mergeElements } from "./scene/merge";
 import { findLinkInText, getLinkBadgeAt, normalizeLink, openLink } from "./element/links";
-import { forgetRoom, listRecentRooms, renameRecentRoom, roomBoardId, setRoomBoard } from "./scene/recentRooms";
+import { clearRoomRecords, forgetRoom, listRecentRooms, renameRecentRoom, roomBoardId, setRoomBoard } from "./scene/recentRooms";
 import { t } from "./i18n";
 import type {
   AppState,
@@ -3309,6 +3309,14 @@ export class App implements CloudHost {
     const mine = listBoards().filter((board) => board.cloudSynced || board.remote);
     const wasOpen = currentBoardId();
     disconnectCloud();
+    // The room list is the account's too, and each entry is a key to a room:
+    // the next person at this computer must not inherit it.
+    clearRoomRecords();
+    try {
+      localStorage.removeItem("axdraw:rooms-synced");
+    } catch {
+      // Storage unavailable.
+    }
     for (const board of mine) deleteBoard(board.id);
     if (!listBoards().length || mine.some((board) => board.id === wasOpen)) {
       const keep = listBoards()[0] ?? createBoard();
