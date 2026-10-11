@@ -1419,7 +1419,7 @@ try {
   });
   await page.waitForTimeout(60);
   const afterForget = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem("axdraw:rooms")).map((room) => room.id),
+    JSON.parse(localStorage.getItem("axdraw:rooms")).filter((room) => !room.deleted).map((room) => room.id),
   );
   check(
     "forgetting a room drops only that room",

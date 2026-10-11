@@ -499,7 +499,7 @@ try {
   const removed = await tPage2.evaluate(() => window.axdraw.cleanupEmpty());
   const tidied = await tPage2.evaluate(() => ({
     boards: window.axdraw.listBoards().map((b) => b.id),
-    rooms: JSON.parse(localStorage.getItem("axdraw:rooms")).map((r) => r.name),
+    rooms: JSON.parse(localStorage.getItem("axdraw:rooms")).filter((r) => !r.deleted).map((r) => r.name),
     open: window.axdraw.currentBoardId(),
   }));
   check(
@@ -644,16 +644,26 @@ try {
     );
   }
 
+  // A live room run from the laptop: its link must reach the account too.
+  let laptopRoom = null;
+  if (!process.env.SKIP_ROOMS) {
+    await lPage.evaluate(() => window.axdraw.startCollab());
+    await lPage.waitForFunction(() => Boolean(window.axdraw.collab), null, { timeout: 10000 });
+    laptopRoom = await lPage.evaluate(() => window.axdraw.collab.id);
+    await lPage.waitForTimeout(2500); // the room list goes up a moment after it changes
+  }
+
   await lPage.evaluate(() => window.axdraw.newBoard());
   await rect(lPage, [500, 400], [620, 480]);
   const listStored = async () =>
     LIVE ? (await cloudApi(lPage, "/api/cloud/canvases")).body.canvases : sql("SELECT id, name, size FROM canvases");
   let stored = await listStored();
   // Saves trail edits by a couple of seconds, more against a real deployment.
-  for (let deadline = Date.now() + 15000; stored.length < 2 && Date.now() < deadline; ) {
+  for (let deadline = Date.now() + 15000; stored.filter((row) => !row.id.startsWith("_")).length < 2 && Date.now() < deadline; ) {
     await lPage.waitForTimeout(1000);
     stored = await listStored();
   }
+  stored = stored.filter((row) => !row.id.startsWith("_")); // the room list is stored beside the canvases
   check("every canvas is saved to the account", stored.length === 2, `${stored.length} canvases`);
   check("canvas names reach the server encrypted", stored.every((row) => !/캔버스/.test(row.name)), stored.map((r) => r.name.slice(0, 12)).join(","));
 
@@ -672,6 +682,25 @@ try {
     JSON.stringify((await boards(tabPage)).map((b) => b.name)),
   );
   check("and opens one with its drawing", (await live(tabPage)).length === 1);
+  if (laptopRoom) {
+    const tabletRooms = await tabPage.evaluate(() =>
+      JSON.parse(localStorage.getItem("axdraw:rooms") || "[]").filter((r) => !r.deleted).map((r) => r.id),
+    );
+    check("the room list follows the login to another device", tabletRooms.includes(laptopRoom), JSON.stringify(tabletRooms));
+    // And the room's canvas, opened there, joins the room again.
+    const roomCanvas = await tabPage.evaluate(
+      (id) => JSON.parse(localStorage.getItem("axdraw:rooms")).find((r) => r.id === id)?.boardId,
+      laptopRoom,
+    );
+    const back = await tabPage.evaluate(() => window.axdraw.currentBoardId());
+    await tabPage.evaluate((id) => window.axdraw.openBoard(id), roomCanvas);
+    await tabPage.waitForFunction((id) => window.axdraw.collab?.id === id, laptopRoom, { timeout: 15000 }).catch(() => undefined);
+    check(
+      "a room canvas opened on another device rejoins its room",
+      (await tabPage.evaluate(() => window.axdraw.collab?.id)) === laptopRoom,
+    );
+    await tabPage.evaluate((id) => window.axdraw.openBoard(id), back);
+  }
 
   // Both devices edit the same canvas without seeing each other's save.
   const shared = await tabPage.evaluate(() => window.axdraw.currentBoardId());
@@ -715,13 +744,14 @@ try {
     left: window.axdraw.listBoards().filter((b) => b.cloudSynced || b.remote).length,
     onScreen: window.axdraw.elements.filter((e) => !e.isDeleted).length,
     account: localStorage.getItem("axdraw:cloud"),
+    rooms: JSON.parse(localStorage.getItem("axdraw:rooms") || "[]").length,
   }));
   check(
     "logging out removes the account's canvases from that device",
-    afterLogout.left === 0 && afterLogout.onScreen === 0 && afterLogout.account === null,
+    afterLogout.left === 0 && afterLogout.onScreen === 0 && afterLogout.account === null && afterLogout.rooms === 0,
     JSON.stringify(afterLogout),
   );
-  const stillStored = (await listStored()).length;
+  const stillStored = (await listStored()).filter((row) => !row.id.startsWith("_")).length;
   check("and they stay in the account", stillStored === 2, `${stillStored} in the account`);
 
   await lPage.click(".cloud-chip");

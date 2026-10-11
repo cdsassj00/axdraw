@@ -149,7 +149,15 @@ import { CloudSync, type CloudHost } from "./scene/cloudSync";
 import { adoptCloudFromHash, disconnectCloud, loginAccount, registerCloud, signupAccount } from "./scene/cloud";
 import { mergeElements } from "./scene/merge";
 import { findLinkInText, getLinkBadgeAt, normalizeLink, openLink } from "./element/links";
-import { forgetRoom, listRecentRooms, renameRecentRoom, roomBoardId, setRoomBoard } from "./scene/recentRooms";
+import {
+  clearRoomRecords,
+  forgetRoom,
+  listRecentRooms,
+  renameRecentRoom,
+  roomBoardId,
+  setRoomBoard,
+  unlinkRoomBoard,
+} from "./scene/recentRooms";
 import { t } from "./i18n";
 import type {
   AppState,
@@ -3151,9 +3159,13 @@ export class App implements CloudHost {
    * live room, not in a private copy that drifts away from it.
    */
   async resumeRoom(): Promise<void> {
-    const room = getBoard(currentBoardId())?.room;
-    if (!room || this.collab) return;
+    // The canvas's own link, or failing that the account's room list, which
+    // records which canvas each room lives in.
     const boardId = currentBoardId();
+    const listed = listRecentRooms().find((entry) => entry.boardId === boardId);
+    const room = getBoard(boardId)?.room ?? (listed ? { id: listed.id, key: listed.key } : undefined);
+    if (!room || this.collab) return;
+    if (!getBoard(boardId)?.room) setBoardLink(boardId, { room });
     try {
       const session = await CollabSession.join(this, room.id, room.key, { guest: false });
       // The user may have moved on while the socket was opening.
@@ -3309,6 +3321,14 @@ export class App implements CloudHost {
     const mine = listBoards().filter((board) => board.cloudSynced || board.remote);
     const wasOpen = currentBoardId();
     disconnectCloud();
+    // The room list is the account's too, and each entry is a key to a room:
+    // the next person at this computer must not inherit it.
+    clearRoomRecords();
+    try {
+      localStorage.removeItem("axdraw:rooms-synced");
+    } catch {
+      // Storage unavailable.
+    }
     for (const board of mine) deleteBoard(board.id);
     if (!listBoards().length || mine.some((board) => board.id === wasOpen)) {
       const keep = listBoards()[0] ?? createBoard();
@@ -3352,6 +3372,7 @@ export class App implements CloudHost {
         const room = { id: this.collab.id, key: this.collab.keyText };
         setBoardLink(currentBoardId(), { room });
         setRoomBoard(room.id, room.key, currentBoardId());
+        this.cloud.changed();
         this.notify();
       }
       await navigator.clipboard.writeText(this.collab.url);
@@ -3363,8 +3384,10 @@ export class App implements CloudHost {
 
   /** Stops sharing this canvas live. The canvas keeps its drawing. */
   stopCollab(): void {
+    if (this.collab) unlinkRoomBoard(this.collab.id);
     this.disconnectRoom();
     setBoardLink(currentBoardId(), { room: undefined });
+    this.cloud.changed();
     this.onMessage?.(t("Left the collaboration room"));
     this.notify();
   }
