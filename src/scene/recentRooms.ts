@@ -125,6 +125,16 @@ export function setRoomBoard(id: string, key: string, boardId: string): void {
   write(rooms.slice(0, MAX_ROOMS));
 }
 
+/** The room no longer lives in any canvas (its live sharing was stopped). */
+export function unlinkRoomBoard(id: string): void {
+  const rooms = read();
+  const room = rooms.find((entry) => entry.id === id);
+  if (!room || !room.boardId) return;
+  room.boardId = undefined;
+  room.updated = Date.now();
+  write(rooms);
+}
+
 /** Updates the label of a room already on the list; no-op if unknown. */
 export function renameRecentRoom(id: string, name: string): void {
   const rooms = read();

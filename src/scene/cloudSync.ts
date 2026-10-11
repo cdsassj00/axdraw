@@ -308,7 +308,10 @@ export class CloudSync {
 
   private signatureOf(boardId: string): string {
     const scene = this.sceneOf(boardId);
-    return `${sceneSignature(scene.elements, scene.files)}|${getBoard(boardId)?.name ?? ""}`;
+    // The room link is part of what is saved: starting or stopping a live room
+    // on a canvas must reach the account even when nothing is drawn after.
+    const board = getBoard(boardId);
+    return `${sceneSignature(scene.elements, scene.files)}|${board?.name ?? ""}|${board?.room?.id ?? ""}`;
   }
 
   private async push(boardId: string, force = false): Promise<void> {
