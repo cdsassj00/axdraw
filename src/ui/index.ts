@@ -73,6 +73,25 @@ export function createUI(app: App): void {
   const bottomLeft = h("div", { class: "bottom-left" });
   const bottomRight = h("div", { class: "bottom-right" });
   const panel = h("div", { class: "panel island" });
+  // Phones: the style panel is a bottom sheet over half the screen. Opening it
+  // on every tap covered the very shape being edited, so there it opens only
+  // from its own button, and touching the canvas puts it away again.
+  const phone = window.matchMedia("(max-width: 730px)");
+  let phonePanelOpen = false;
+  const panelToggle = h("button", {
+    class: "panel-toggle island",
+    type: "button",
+    text: t("🎨 Style"),
+    onclick: () => {
+      phonePanelOpen = !phonePanelOpen;
+      render();
+    },
+  });
+  app.container.addEventListener("pointerdown", () => {
+    if (!phone.matches || !phonePanelOpen) return;
+    phonePanelOpen = false;
+    render();
+  });
   const welcome = h("div", { class: "welcome" });
 
   topLeft.append(
@@ -95,7 +114,7 @@ export function createUI(app: App): void {
     ),
     toolIsland,
   );
-  root.append(topLeft, toolbar, topRight, bottomLeft, bottomRight, panel, welcome);
+  root.append(topLeft, toolbar, topRight, bottomLeft, bottomRight, panel, panelToggle, welcome);
 
   // Top-centre banner, always shown (no close button): identity + sponsorship.
   root.appendChild(
@@ -336,7 +355,10 @@ export function createUI(app: App): void {
     const tool = app.state.tool;
     const visible = selected.length > 0 || SHAPE_TOOLS.has(tool) || tool === "text";
 
-    panel.hidden = !visible || app.state.zenMode || app.state.viewMode;
+    const wanted = visible && !app.state.zenMode && !app.state.viewMode;
+    if (!wanted) phonePanelOpen = false;
+    panelToggle.hidden = !wanted || !phone.matches || phonePanelOpen;
+    panel.hidden = !wanted || (phone.matches && !phonePanelOpen);
     if (panel.hidden) return;
 
     const types = new Set<string>(selected.length ? selected.map((element) => element.type) : [tool]);
@@ -349,6 +371,21 @@ export function createUI(app: App): void {
     const linear = has("arrow");
 
     panel.replaceChildren();
+    if (phone.matches) {
+      panel.append(
+        h("div", { class: "panel-close-row" }, [
+          h("button", {
+            class: "panel-close",
+            type: "button",
+            text: t("✕ Close"),
+            onclick: () => {
+              phonePanelOpen = false;
+              render();
+            },
+          }),
+        ]),
+      );
+    }
 
     panel.append(
       section("Stroke", [

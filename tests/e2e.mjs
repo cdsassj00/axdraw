@@ -1945,6 +1945,42 @@ try {
       return out;
     });
     check(`on a ${width}px phone every top control can be tapped`, covered.length === 0, covered.join(", "));
+    // Selecting a shape must not throw the style sheet over half the screen:
+    // on a phone it opens only from its own button, and touching the canvas
+    // puts it away.
+    await mobile.evaluate(() => {
+      const app = window.axdraw;
+      app.setTool("rectangle");
+      app.setTool("selection");
+    });
+    await mobile.touchscreen.tap(width / 2, 300);
+    await mobile.evaluate(() => {
+      const app = window.axdraw;
+      const now = Date.now();
+      const id = "phone-shape";
+      app.elements = [...app.elements, {
+        id, type: "rectangle", x: 40, y: 200, width: 120, height: 80, angle: 0, strokeColor: "#1e1e1e",
+        backgroundColor: "transparent", fillStyle: "hachure", strokeWidth: 2, strokeStyle: "solid", roughness: 1,
+        opacity: 100, groupIds: [], frameId: null, roundness: null, seed: 1, version: 1, isDeleted: false,
+        boundElements: null, updated: now, link: null, locked: false,
+      }];
+      app.state.selectedIds = new Set([id]);
+      app.commit();
+    });
+    const sheet = () =>
+      mobile.evaluate(() => ({
+        panel: !document.querySelector(".panel").hidden,
+        toggle: !document.querySelector(".panel-toggle").hidden,
+      }));
+    const onSelect = await sheet();
+    check(`on a ${width}px phone selecting a shape leaves the canvas uncovered`, !onSelect.panel && onSelect.toggle, JSON.stringify(onSelect));
+    await mobile.tap(".panel-toggle");
+    const opened = await sheet();
+    check(`on a ${width}px phone the style button opens the panel`, opened.panel && !opened.toggle, JSON.stringify(opened));
+    await mobile.touchscreen.tap(width / 2, 120);
+    const closed = await sheet();
+    check(`on a ${width}px phone touching the canvas puts the panel away`, !closed.panel, JSON.stringify(closed));
+
     await mobile.tap(".cloud-chip");
     check(
       `on a ${width}px phone the cloud button opens sign-up`,
