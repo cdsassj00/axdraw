@@ -1646,3 +1646,44 @@ input[type="range"] {
   font: inherit;
   font-size: 15px;
 }
+
+/* The phone-only button that opens the style panel. */
+.panel-toggle {
+  display: none;
+}
+@media (max-width: 730px) {
+  .panel-toggle {
+    display: block;
+    position: absolute;
+    right: 8px;
+    bottom: 132px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
+    z-index: 4;
+  }
+  .panel-toggle[hidden] {
+    display: none;
+  }
+  .panel {
+    max-height: 40dvh;
+  }
+  .panel-close-row {
+    display: flex;
+    justify-content: flex-end;
+    margin: -4px 0 4px;
+  }
+  .panel-close {
+    padding: 4px 10px;
+    border: 1px solid var(--separator);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+}
