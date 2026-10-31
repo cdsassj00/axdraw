@@ -34,6 +34,15 @@ import {
 } from "./storage";
 
 const PUSH_DELAY_MS = 2500;
+/** First automatic retry after a failed save; doubles up to RETRY_MAX_MS. */
+const RETRY_FIRST_MS = 15000;
+const RETRY_MAX_MS = 5 * 60 * 1000;
+
+function messageOf(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  const text = String(error ?? "").trim();
+  return text && text !== "[object Object]" ? text : "Cloud saving failed";
+}
 
 /**
  * The account's list of live rooms, stored beside its canvases under a name no
@@ -42,6 +51,8 @@ const PUSH_DELAY_MS = 2500;
  */
 const ROOMS_RECORD = "_rooms";
 const ROOMS_SYNCED_KEY = "axdraw:rooms-synced";
+/** Key in `failed` for the canvas list itself. */
+const LIST = "list";
 
 export type CloudStatus = "off" | "saving" | "saved" | "error";
 
@@ -67,22 +78,108 @@ export class CloudSync {
   private pushing = new Set<string>();
   private again = new Set<string>();
   private signatures = new Map<string, string>();
+  /**
+   * What is failing right now, by what it was: a canvas id for a save,
+   * "pull:<id>", "delete:<id>" or LIST for the canvas list. The chip shows
+   * "saving" while anything is in flight, "not saved" while anything here is
+   * left, and "saved" only when both are empty — so it can no longer stick on
+   * whatever the last request happened to set.
+   */
+  private failed = new Map<string, string>();
+  private retryTimer: number | null = null;
+  private retryDelay = 0;
 
   private roomsTimer: number | null = null;
   private roomsSignature = "";
 
   constructor(private readonly host: CloudHost) {
     window.addEventListener(ROOMS_CHANGED, () => this.roomsChanged());
+    // Back online after a failure: try at once rather than wait for the timer.
+    window.addEventListener("online", () => {
+      if (this.failed.size) void this.retry();
+    });
   }
 
   get account(): CloudAccount | null {
     return cloudAccount();
   }
 
-  private setStatus(status: CloudStatus, error = ""): void {
-    this.status = status;
-    this.lastError = error;
-    this.host.onCloudChanged();
+  /** Recomputes the chip from what is in flight and what has failed. */
+  private refresh(): void {
+    if (!this.account) {
+      this.failed.clear();
+      this.status = "off";
+      this.lastError = "";
+    } else if (this.pushing.size) {
+      this.status = "saving";
+      this.lastError = "";
+    } else if (this.failed.size) {
+      this.status = "error";
+      this.lastError = [...this.failed.values()].pop() ?? "Cloud saving failed";
+    } else {
+      this.status = "saved";
+      this.lastError = "";
+    }
+    if (this.status === "error") this.scheduleRetry();
+    else if (!this.failed.size) this.cancelRetry();
+    try {
+      this.host.onCloudChanged();
+    } catch (error) {
+      // A drawing problem in the UI must not leave the sync engine half-way.
+      console.error(error);
+    }
+  }
+
+  private fail(key: string, error: unknown): void {
+    this.failed.set(key, messageOf(error));
+    this.refresh();
+  }
+
+  private scheduleRetry(): void {
+    if (this.retryTimer !== null) return;
+    this.retryDelay = Math.min(Math.max(this.retryDelay * 2, RETRY_FIRST_MS), RETRY_MAX_MS);
+    this.retryTimer = window.setTimeout(() => {
+      this.retryTimer = null;
+      void this.retry();
+    }, this.retryDelay);
+  }
+
+  private cancelRetry(): void {
+    if (this.retryTimer !== null) window.clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    this.retryDelay = 0;
+  }
+
+  /** Seconds until the next automatic retry, for the chip's wording. */
+  get retryingIn(): number {
+    return this.retryTimer === null ? 0 : Math.round(this.retryDelay / 1000);
+  }
+
+  /**
+   * Tries everything that failed again — the "try again" button, the timer
+   * and coming back online all land here.
+   */
+  async retry(): Promise<void> {
+    if (this.retryTimer !== null) window.clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    const keys = [...this.failed.keys()];
+    if (keys.includes(LIST)) {
+      await this.reconcile();
+    }
+    for (const key of keys) {
+      if (key === LIST) continue;
+      if (key.startsWith("pull:")) {
+        this.failed.delete(key);
+        await this.pull(key.slice(5));
+      } else if (key.startsWith("delete:")) {
+        this.failed.delete(key);
+        await this.deleted(key.slice(7));
+      } else {
+        await this.push(key, true);
+      }
+    }
+    // Whatever failed again has re-armed the timer through refresh().
+    this.refresh();
   }
 
   /**
@@ -93,14 +190,15 @@ export class CloudSync {
   async reconcile(): Promise<void> {
     const account = this.account;
     if (!account) {
-      this.setStatus("off");
+      this.refresh();
       return;
     }
     let remote;
     try {
       remote = await listCloudCanvases(account);
+      this.failed.delete(LIST);
     } catch (error) {
-      this.setStatus("error", error instanceof Error ? error.message : String(error));
+      this.fail(LIST, error);
       return;
     }
     const seen = new Set<string>();
@@ -131,7 +229,7 @@ export class CloudSync {
       }
     }
     await this.syncRooms(roomsRecord?.updated ?? 0);
-    if (this.status !== "error") this.setStatus("saved");
+    this.refresh();
   }
 
   private roomsSynced(): number {
@@ -261,8 +359,11 @@ export class CloudSync {
     if (!account) return;
     try {
       await deleteCloudCanvas(account, boardId);
+      this.failed.delete(`delete:${boardId}`);
+      this.failed.delete(boardId);
+      this.refresh();
     } catch (error) {
-      this.setStatus("error", error instanceof Error ? error.message : String(error));
+      this.fail(`delete:${boardId}`, error);
     }
   }
 
@@ -277,18 +378,24 @@ export class CloudSync {
     const account = this.account;
     if (!account) return;
     try {
+      // Edits here that never reached the cloud must still go up after the
+      // merge; only a copy that was clean beforehand counts as saved after.
+      // A placeholder has no edits of its own: its download is the saved copy.
+      const clean = Boolean(getBoard(boardId)?.remote) || this.known(boardId) === this.signatureOf(boardId);
       const pulled = await pullCloudCanvas(account, boardId);
+      this.failed.delete(`pull:${boardId}`);
       if (!pulled) {
         // Listed but gone: nothing to merge, and nothing to wait for.
         setBoardLink(boardId, { remote: undefined });
+        this.refresh();
         return;
       }
       this.mergeInto(boardId, pulled.scene as CloudPayload);
       setBoardLink(boardId, { cloudSynced: pulled.updated, remote: undefined });
-      this.signatures.set(boardId, this.signatureOf(boardId));
-      this.host.onCloudChanged();
+      if (clean) this.remember(boardId, this.signatureOf(boardId));
+      this.refresh();
     } catch (error) {
-      this.setStatus("error", error instanceof Error ? error.message : String(error));
+      this.fail(`pull:${boardId}`, error);
     }
   }
 
@@ -314,27 +421,48 @@ export class CloudSync {
     return `${sceneSignature(scene.elements, scene.files)}|${board?.name ?? ""}|${board?.room?.id ?? ""}`;
   }
 
+  /** Fingerprint of what the cloud holds for a board, if known. */
+  private known(boardId: string): string | undefined {
+    return this.signatures.get(boardId) ?? getBoard(boardId)?.cloudSignature;
+  }
+
+  private remember(boardId: string, signature: string, persist = true): void {
+    this.signatures.set(boardId, signature);
+    if (persist) setBoardLink(boardId, { cloudSignature: signature });
+  }
+
   private async push(boardId: string, force = false): Promise<void> {
     const account = this.account;
+    if (!account) return;
     const board = getBoard(boardId);
-    // A placeholder has nothing local yet; saving it would blank the cloud copy.
-    if (!account || !board || board.remote) return;
+    // A placeholder has nothing local yet; saving it would blank the cloud
+    // copy. A board deleted meanwhile has nothing left to save either.
+    if (!board || board.remote) {
+      if (this.failed.delete(boardId)) this.refresh();
+      return;
+    }
     if (this.pushing.has(boardId)) {
       this.again.add(boardId);
       return;
     }
-    const signature = this.signatureOf(boardId);
-    if (!force && this.signatures.get(boardId) === signature) return;
+    if (!force && this.known(boardId) === this.signatureOf(boardId)) {
+      if (this.failed.delete(boardId)) this.refresh();
+      return;
+    }
     // Every new browser starts on a blank "캔버스 1"; uploading those would
     // fill the list with empty canvases from each device a person uses.
-    if (!getBoard(boardId)?.cloudSynced && !this.sceneOf(boardId).elements.some((element) => !element.isDeleted)) {
+    if (!board.cloudSynced && !this.sceneOf(boardId).elements.some((element) => !element.isDeleted)) {
+      if (this.failed.delete(boardId)) this.refresh();
       return;
     }
 
     this.pushing.add(boardId);
-    this.setStatus("saving");
     try {
+      this.refresh();
       for (let attempt = 0; attempt < 3; attempt++) {
+        // Read what is sent and its fingerprint together, so the fingerprint
+        // remembered afterwards is exactly what reached the cloud.
+        const signature = this.signatureOf(boardId);
         try {
           const updated = await pushCloudCanvas(
             account,
@@ -344,8 +472,8 @@ export class CloudSync {
             getBoard(boardId)?.cloudSynced ?? 0,
           );
           setBoardLink(boardId, { cloudSynced: updated });
-          this.signatures.set(boardId, signature);
-          this.setStatus("saved");
+          this.remember(boardId, signature);
+          this.failed.delete(boardId);
           return;
         } catch (error) {
           if (!(error instanceof CloudConflict)) throw error;
@@ -355,9 +483,10 @@ export class CloudSync {
       }
       throw new Error("Could not save to the cloud — the canvas keeps changing on another device");
     } catch (error) {
-      this.setStatus("error", error instanceof Error ? error.message : String(error));
+      this.failed.set(boardId, messageOf(error));
     } finally {
       this.pushing.delete(boardId);
+      this.refresh();
       if (this.again.delete(boardId)) void this.push(boardId);
     }
   }

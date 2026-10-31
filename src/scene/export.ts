@@ -7,7 +7,7 @@ import {
   SCENE_VERSION,
   THEME_FILTER,
 } from "../constants";
-import { getCommonBounds } from "../element/bounds";
+import { getCommonVisualBounds, hasPoints, normalizePoints } from "../element/bounds";
 import { formatFileSize, middleTruncate } from "../element/filecard";
 import { getDashArray, getElementShape, getFreedrawStroke } from "../element/shapes";
 import { opsToPath } from "../rough/render";
@@ -39,7 +39,7 @@ export function exportToCanvas(
 ): HTMLCanvasElement {
   const list = visible(options.elements ?? elements);
   const padding = options.padding ?? EXPORT_PADDING;
-  const bounds = getCommonBounds(list);
+  const bounds = getCommonVisualBounds(list);
   const width = Math.max(1, Math.ceil(bounds.x2 - bounds.x1 + padding * 2));
   const height = Math.max(1, Math.ceil(bounds.y2 - bounds.y1 + padding * 2));
 
@@ -196,7 +196,7 @@ export function exportToSvgString(
 ): string {
   const list = visible(options.elements ?? elements);
   const padding = options.padding ?? EXPORT_PADDING;
-  const bounds = getCommonBounds(list);
+  const bounds = getCommonVisualBounds(list);
   const width = Math.max(1, Math.ceil(bounds.x2 - bounds.x1 + padding * 2));
   const height = Math.max(1, Math.ceil(bounds.y2 - bounds.y1 + padding * 2));
   const offsetX = -bounds.x1 + padding;
@@ -326,6 +326,10 @@ export function normalizeImportedElement(raw: Record<string, unknown>): AxElemen
     element.letterSpacing = Number(element.letterSpacing ?? 0);
     element.autoResize = element.autoResize !== false;
   }
+  // Excalidraw keeps a stroke's first point at x/y even when the stroke heads
+  // left or up; rebase so x/y/width/height is the box the stroke really fills.
+  const shaped = element as unknown as AxElement;
+  if (hasPoints(shaped) && Array.isArray(shaped.points) && shaped.points.length) normalizePoints(shaped);
   if (element.type === "image") {
     element.scale = Array.isArray(element.scale) ? element.scale : [1, 1];
     element.status = (element.status as string) ?? "saved";

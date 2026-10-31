@@ -45,6 +45,12 @@ export function mergeElements(
 /** Cheap change detector: any edit bumps a version or changes the counts. */
 export function sceneSignature(elements: readonly AxElement[], files: object): string {
   let versions = 0;
-  for (const element of elements) versions += element.version;
-  return `${elements.length}:${versions}:${Object.keys(files).length}`;
+  let deleted = 0;
+  for (const element of elements) {
+    versions += element.version;
+    if (element.isDeleted) deleted++;
+  }
+  // The deleted count catches a deletion made without a version bump (a
+  // script flipping isDeleted), which the version sum alone would miss.
+  return `${elements.length}:${versions}:${deleted}:${Object.keys(files).length}`;
 }

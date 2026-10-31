@@ -1489,6 +1489,31 @@ input[type="range"] {
 }
 .cloud-chip[data-state="error"] { border-color: var(--danger); color: var(--danger); }
 
+.cloud-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(460px, calc(100vw - 32px));
+  padding: 6px 8px 6px 12px;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.cloud-alert[hidden] { display: none; }
+.cloud-alert-text { flex: 1; min-width: 0; }
+.cloud-retry {
+  flex: none;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: var(--danger);
+  color: #fff;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .share-btn.is-live { background: #2f9e44; }
 
 /* Share dialog: the two link kinds side by side, each saying what it does. */
