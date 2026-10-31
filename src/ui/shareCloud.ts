@@ -121,6 +121,13 @@ export function openShareDialog(app: App): void {
 /* ---------------------------------------------------------------- cloud */
 
 /** Status text for the chip beside the canvas name. */
+/** A sync error in the reader's language; "… (500)" keeps its status code. */
+export function cloudErrorText(message: string): string {
+  const coded = /^(.*) \((\d{3})\)$/.exec(message);
+  if (coded) return `${t(coded[1])} (${t("error")} ${coded[2]})`;
+  return t(message || "Cloud saving failed");
+}
+
 export function cloudChipLabel(app: App): { text: string; title: string; state: string } {
   const who = app.cloud.account?.email ?? "";
   switch (app.cloud.status) {
@@ -129,7 +136,7 @@ export function cloudChipLabel(app: App): { text: string; title: string; state: 
     case "saving":
       return { text: t("☁ Saving…"), title: who, state: "saving" };
     case "error":
-      return { text: t("☁ Not saved"), title: app.cloud.lastError || t("Cloud saving failed"), state: "error" };
+      return { text: t("☁ Not saved"), title: cloudErrorText(app.cloud.lastError), state: "error" };
     default:
       return { text: t("☁ Saved"), title: who, state: "saved" };
   }

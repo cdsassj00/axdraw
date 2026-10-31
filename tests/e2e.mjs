@@ -394,6 +394,54 @@ try {
   });
   check("PNG export produces an image", png.type === "image/png" && png.size > 1000, JSON.stringify(png));
 
+  // Excalidraw keeps an arrow's first point at x/y; one heading up-left has
+  // negative points. Export used x..x+width and left a wide blank margin on
+  // the right and bottom while cutting the arrow off on the other side.
+  const exportSize = await page.evaluate(async () => {
+    const app = window.axdraw;
+    const kept = app.elements;
+    const base = { angle: 0, strokeColor: "#1e1e1e", backgroundColor: "transparent", fillStyle: "solid",
+      strokeWidth: 2, strokeStyle: "solid", roughness: 0, opacity: 100, groupIds: [], frameId: null,
+      roundness: null, seed: 1, version: 1, versionNonce: 1, isDeleted: false, boundElements: null,
+      updated: 1, link: null, locked: false };
+    const box = { ...base, id: "export-box", type: "rectangle", x: 0, y: 0, width: 100, height: 100 };
+    const arrow = { ...base, id: "export-arrow", type: "arrow", x: 500, y: 500, width: 300, height: 200,
+      points: [[0, 0], [-300, -200]], startArrowhead: null, endArrowhead: "arrow", startBinding: null,
+      endBinding: null, elbowed: false };
+    const sizeOf = async () => {
+      const blob = await new Promise((resolve) => {
+        const originalCreate = URL.createObjectURL;
+        const originalClick = HTMLAnchorElement.prototype.click;
+        URL.createObjectURL = (value) => { resolve(value); return originalCreate.call(URL, value); };
+        HTMLAnchorElement.prototype.click = function () {};
+        void app.exportPng({ scale: 1 }).then(() => {
+          HTMLAnchorElement.prototype.click = originalClick;
+          URL.createObjectURL = originalCreate;
+        });
+      });
+      const bitmap = await createImageBitmap(blob);
+      return [bitmap.width, bitmap.height];
+    };
+    // As stored on canvases pasted before the fix: points left as they came.
+    app.elements = [box, structuredClone(arrow)];
+    const stored = await sizeOf();
+    // Pasting now rebases the points, so the box the arrow fills is its own.
+    app.elements = [];
+    app.pasteText(JSON.stringify({ type: "excalidraw", version: 2, elements: [box, arrow], files: {} }));
+    const pasted = app.elements.find((element) => element.type === "arrow");
+    const minPoint = Math.min(...pasted.points.flat());
+    const afterPaste = await sizeOf();
+    app.elements = kept;
+    app.commit();
+    return { stored, afterPaste, minPoint };
+  });
+  check(
+    "PNG export fits arrows pointing up-left, with no blank right/bottom margin",
+    exportSize.stored[0] === 520 && exportSize.stored[1] === 520 &&
+      exportSize.afterPaste[0] === 520 && exportSize.afterPaste[1] === 520 && exportSize.minPoint === 0,
+    JSON.stringify(exportSize),
+  );
+
   /* ---------------- scene file round trip ---------------- */
 
   const roundTrip = await page.evaluate(async () => {

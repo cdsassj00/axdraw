@@ -87,12 +87,41 @@ async function authHeaders(account: CloudAccount): Promise<Record<string, string
   return { authorization: `Bearer ${account.workspace}.${await tokenFor(account.secret)}` };
 }
 
+/**
+ * fetch with a deadline. A request that never answers — a dropped mobile
+ * connection, a proxy holding an upload — used to leave the chip on "saving"
+ * for good, because nothing ever settled. The deadline also covers reading the
+ * body: aborting after the body is read is a no-op, so the timer is left be.
+ */
+export async function cloudFetch(url: string, init: RequestInit = {}, timeoutMs = 30000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    clearTimeout(timer);
+    if (controller.signal.aborted) throw new Error("The server did not answer in time — check the connection");
+    throw new Error(
+      error instanceof Error && error.message && !/fetch|network|load failed/i.test(error.message)
+        ? error.message
+        : "Could not reach the server — check the internet connection",
+    );
+  }
+}
+
+/** Upload deadline: 45 seconds, plus 15 seconds for every megabyte sent. */
+function uploadTimeout(bytes: number): number {
+  return 45000 + Math.ceil(bytes / (1024 * 1024)) * 15000;
+}
+
 async function failure(response: Response, fallback: string): Promise<Error> {
   if (response.status === 503) return new Error("Cloud saving is not switched on yet on this server");
   if (response.status === 401) return new Error("This browser's cloud access is no longer valid");
   if (response.status === 413) return new Error("This canvas is too large to save to the cloud");
   const body = (await response.json().catch(() => null)) as { error?: string } | null;
-  return new Error(body?.error ?? fallback);
+  // Never an empty message: the chip shows it, and "" hid what went wrong.
+  const message = body?.error?.trim() || `${fallback} (${response.status})`;
+  return new Error(message === "too large" ? "This canvas is too large to save to the cloud" : message);
 }
 
 /**
@@ -104,7 +133,7 @@ export async function registerCloud(
   consent: { privacy: boolean; marketing: boolean },
 ): Promise<CloudAccount> {
   const secret = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
-  const response = await fetch(`${API_BASE}/api/cloud/register`, {
+  const response = await cloudFetch(`${API_BASE}/api/cloud/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -143,7 +172,7 @@ async function authKeyFor(email: string, password: string): Promise<string> {
 }
 
 async function accountRequest(path: string, body: unknown): Promise<{ workspace: string; secret: string }> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await cloudFetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -217,7 +246,7 @@ export function disconnectCloud(): void {
 }
 
 export async function fetchAccount(account: CloudAccount): Promise<{ email: string; marketing: boolean }> {
-  const response = await fetch(`${API_BASE}/api/cloud/account`, { headers: await authHeaders(account) });
+  const response = await cloudFetch(`${API_BASE}/api/cloud/account`, { headers: await authHeaders(account) });
   if (!response.ok) throw await failure(response, "Could not reach cloud storage");
   const result = (await response.json()) as { email: string; marketing: boolean };
   if (result.email && result.email !== account.email) storeAccount({ ...account, email: result.email });
@@ -225,7 +254,7 @@ export async function fetchAccount(account: CloudAccount): Promise<{ email: stri
 }
 
 export async function setMarketingConsent(account: CloudAccount, marketing: boolean): Promise<void> {
-  const response = await fetch(`${API_BASE}/api/cloud/consent`, {
+  const response = await cloudFetch(`${API_BASE}/api/cloud/consent`, {
     method: "POST",
     headers: { ...(await authHeaders(account)), "content-type": "application/json" },
     body: JSON.stringify({ marketing }),
@@ -235,7 +264,7 @@ export async function setMarketingConsent(account: CloudAccount, marketing: bool
 
 /** Deletes every cloud canvas and the account, then forgets it locally. */
 export async function deleteCloudAccount(account: CloudAccount): Promise<void> {
-  const response = await fetch(`${API_BASE}/api/cloud/account`, {
+  const response = await cloudFetch(`${API_BASE}/api/cloud/account`, {
     method: "DELETE",
     headers: await authHeaders(account),
   });
@@ -244,7 +273,7 @@ export async function deleteCloudAccount(account: CloudAccount): Promise<void> {
 }
 
 export async function listCloudCanvases(account: CloudAccount): Promise<CloudCanvasMeta[]> {
-  const response = await fetch(`${API_BASE}/api/cloud/canvases`, { headers: await authHeaders(account) });
+  const response = await cloudFetch(`${API_BASE}/api/cloud/canvases`, { headers: await authHeaders(account) });
   if (!response.ok) throw await failure(response, "Could not list cloud canvases");
   const { canvases } = (await response.json()) as {
     canvases: { id: string; name: string; updated: number; size: number }[];
@@ -267,7 +296,7 @@ export async function pullCloudCanvas(
   account: CloudAccount,
   id: string,
 ): Promise<{ scene: CloudScene; updated: number } | null> {
-  const response = await fetch(`${API_BASE}/api/cloud/canvases/${id}`, { headers: await authHeaders(account) });
+  const response = await cloudFetch(`${API_BASE}/api/cloud/canvases/${id}`, { headers: await authHeaders(account) }, 180000);
   if (response.status === 404) return null;
   if (!response.ok) throw await failure(response, "Could not load the canvas from the cloud");
   const scene = await decryptJson<CloudScene>(await keyFor(account.secret), await response.arrayBuffer());
@@ -295,16 +324,24 @@ export async function pushCloudCanvas(
 ): Promise<number> {
   const key = await keyFor(account.secret);
   const encryptedName = toBase64Url(await encryptBytes(key, new TextEncoder().encode(name)));
-  const response = await fetch(`${API_BASE}/api/cloud/canvases/${id}`, {
-    method: "PUT",
-    headers: {
-      ...(await authHeaders(account)),
-      "content-type": "application/octet-stream",
-      "x-canvas-name": encryptedName,
-      "x-base-version": String(base),
+  const body = await encryptJson(key, scene);
+  const bytes = body.byteLength;
+  // The server refuses anything over 20 MiB; say so without sending it first.
+  if (bytes > 20 * 1024 * 1024) throw new Error("This canvas is too large to save to the cloud");
+  const response = await cloudFetch(
+    `${API_BASE}/api/cloud/canvases/${id}`,
+    {
+      method: "PUT",
+      headers: {
+        ...(await authHeaders(account)),
+        "content-type": "application/octet-stream",
+        "x-canvas-name": encryptedName,
+        "x-base-version": String(base),
+      },
+      body,
     },
-    body: await encryptJson(key, scene),
-  });
+    uploadTimeout(bytes),
+  );
   if (response.status === 409) {
     const { updated } = (await response.json()) as { updated: number };
     throw new CloudConflict(updated);
@@ -314,7 +351,7 @@ export async function pushCloudCanvas(
 }
 
 export async function deleteCloudCanvas(account: CloudAccount, id: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/api/cloud/canvases/${id}`, {
+  const response = await cloudFetch(`${API_BASE}/api/cloud/canvases/${id}`, {
     method: "DELETE",
     headers: await authHeaders(account),
   });

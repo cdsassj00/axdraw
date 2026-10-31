@@ -27,7 +27,7 @@ import { iconEl } from "./icons";
 import { createCommandPalette } from "./commandPalette";
 import { createRecognitionChip } from "./recognitionChip";
 import { forgetRoom, listRecentRooms, roomUrl } from "../scene/recentRooms";
-import { cloudChipLabel, openCloudDialog, openShareDialog } from "./shareCloud";
+import { cloudChipLabel, cloudErrorText, openCloudDialog, openShareDialog } from "./shareCloud";
 
 interface ToolDefinition {
   tool: ToolType;
@@ -67,6 +67,18 @@ export function createUI(app: App): void {
     type: "button",
     onclick: () => openCloudDialog(app),
   });
+  // A failed cloud save says what went wrong and offers to try again, in
+  // view: a hover title alone left people staring at a stuck chip.
+  const cloudAlertText = h("span", { class: "cloud-alert-text" });
+  const cloudAlert = h("div", { class: "cloud-alert island", role: "alert" }, [
+    cloudAlertText,
+    h("button", {
+      class: "cloud-retry",
+      type: "button",
+      text: t("Try again"),
+      onclick: () => void app.cloud.retry(),
+    }),
+  ]);
   const toolIsland = h("div", { class: "island", style: { padding: "6px" } });
   const toolbar = h("div", { class: "toolbar island" });
   const topRight = h("div", { class: "top-right" });
@@ -112,6 +124,7 @@ export function createUI(app: App): void {
         cloudChip,
       ],
     ),
+    cloudAlert,
     toolIsland,
   );
   root.append(topLeft, toolbar, topRight, bottomLeft, bottomRight, panel, panelToggle, welcome);
@@ -258,6 +271,13 @@ export function createUI(app: App): void {
     cloudChip.setAttribute("aria-label", cloud.text);
     cloudChip.title = cloud.title;
     cloudChip.dataset.state = cloud.state;
+    cloudAlert.hidden = cloud.state !== "error";
+    if (cloud.state === "error") {
+      const wait = app.cloud.retryingIn;
+      cloudAlertText.textContent =
+        `${t("Not saved to the cloud")}: ${cloudErrorText(app.cloud.lastError)}` +
+        (wait ? ` · ${t("trying again in {n}s").replace("{n}", String(wait))}` : "");
+    }
 
     topRight.replaceChildren(
       ...(COFFEE_URL

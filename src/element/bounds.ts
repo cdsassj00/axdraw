@@ -52,6 +52,55 @@ export function getElementBounds(element: AxElement): Bounds {
   return { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
 }
 
+/**
+ * Bounds of what is actually drawn. Lines, arrows and pen strokes imported
+ * from Excalidraw keep their first point at x/y, so a stroke heading left or
+ * up has negative points and x..x+width covers empty space to the right and
+ * below instead — which is what put wide blank margins on exported images.
+ */
+export function getElementVisualBounds(element: AxElement): Bounds {
+  if (!hasPoints(element) || !element.points.length) return getElementBounds(element);
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [px, py] of element.points) {
+    minX = Math.min(minX, px);
+    minY = Math.min(minY, py);
+    maxX = Math.max(maxX, px);
+    maxY = Math.max(maxY, py);
+  }
+  const x1 = element.x + minX;
+  const y1 = element.y + minY;
+  const x2 = element.x + maxX;
+  const y2 = element.y + maxY;
+  if (!element.angle) return { x1, y1, x2, y2 };
+  // Rotation is about the box centre, the same centre the renderer uses.
+  const [, , , , cx, cy] = getElementAbsoluteCoords(element);
+  const corners = [rotate(x1, y1, cx, cy, element.angle), rotate(x2, y1, cx, cy, element.angle),
+    rotate(x2, y2, cx, cy, element.angle), rotate(x1, y2, cx, cy, element.angle)];
+  const xs = corners.map((c) => c[0]);
+  const ys = corners.map((c) => c[1]);
+  return { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
+}
+
+/** Common bounds of what is drawn — for export, where every pixel counts. */
+export function getCommonVisualBounds(elements: readonly AxElement[]): Bounds {
+  if (!elements.length) return { x1: 0, y1: 0, x2: 0, y2: 0 };
+  let x1 = Infinity;
+  let y1 = Infinity;
+  let x2 = -Infinity;
+  let y2 = -Infinity;
+  for (const element of elements) {
+    const b = getElementVisualBounds(element);
+    x1 = Math.min(x1, b.x1);
+    y1 = Math.min(y1, b.y1);
+    x2 = Math.max(x2, b.x2);
+    y2 = Math.max(y2, b.y2);
+  }
+  return { x1, y1, x2, y2 };
+}
+
 export function getCommonBounds(elements: readonly AxElement[]): Bounds {
   if (!elements.length) return { x1: 0, y1: 0, x2: 0, y2: 0 };
   let x1 = Infinity;

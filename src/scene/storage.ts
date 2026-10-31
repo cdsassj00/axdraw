@@ -60,6 +60,11 @@ export interface BoardMeta {
   cloudSynced?: number;
   /** Listed in the cloud but not yet downloaded to this browser. */
   remote?: boolean;
+  /**
+   * Fingerprint of what the cloud copy holds. Kept across reloads so that
+   * opening an unchanged canvas does not upload it all over again.
+   */
+  cloudSignature?: string;
 }
 
 function sceneKey(boardId: string): string {
@@ -233,7 +238,7 @@ export function deleteBoard(id: string): void {
 /** Attaches (or with `undefined`, detaches) a room or share link to a board. */
 export function setBoardLink(
   id: string,
-  link: Partial<Pick<BoardMeta, "room" | "shareId" | "cloudSynced" | "remote">>,
+  link: Partial<Pick<BoardMeta, "room" | "shareId" | "cloudSynced" | "remote" | "cloudSignature">>,
 ): void {
   writeIndex(readIndex().map((board) => (board.id === id ? { ...board, ...link } : board)));
 }

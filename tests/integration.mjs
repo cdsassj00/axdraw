@@ -667,6 +667,62 @@ try {
   check("every canvas is saved to the account", stored.length === 2, `${stored.length} canvases`);
   check("canvas names reach the server encrypted", stored.every((row) => !/캔버스/.test(row.name)), stored.map((r) => r.name.slice(0, 12)).join(","));
 
+  // A save that fails must say why, offer to try again, and recover — the
+  // chip used to sit on "saving…" with no error at all.
+  const canvasPut = /\/api\/cloud\/canvases\/[a-z0-9]+$/;
+  await lPage.route(canvasPut, (route) =>
+    route.request().method() === "PUT" ? route.fulfill({ status: 500, body: "" }) : route.continue(),
+  );
+  await rect(lPage, [520, 200], [600, 260]);
+  await lPage.waitForFunction(() => document.querySelector(".cloud-chip")?.dataset.state === "error", null, { timeout: 15000 });
+  const alert = await lPage.evaluate(() => ({
+    shown: !document.querySelector(".cloud-alert").hidden,
+    text: document.querySelector(".cloud-alert-text").textContent,
+    retry: Boolean(document.querySelector(".cloud-alert .cloud-retry")),
+    error: window.axdraw.cloud.lastError,
+  }));
+  check(
+    "a failed save shows its reason and a try-again button",
+    alert.shown && alert.retry && alert.error.length > 0 && /500/.test(alert.text),
+    JSON.stringify(alert),
+  );
+  check("and says it will try again by itself", /\d+/.test(alert.text.split("·")[1] ?? ""), alert.text);
+  await lPage.unroute(canvasPut);
+  await lPage.route(canvasPut, (route) => (route.request().method() === "PUT" ? route.abort() : route.continue()));
+  await lPage.click(".cloud-retry");
+  await lPage.waitForFunction(
+    () => document.querySelector(".cloud-chip")?.dataset.state === "error" && window.axdraw.cloud.lastError.length > 0,
+    null,
+    { timeout: 15000 },
+  );
+  check("a dropped connection is reported, not left on 'saving'", (await lPage.evaluate(() => window.axdraw.cloud.lastError)).length > 0);
+  await lPage.unroute(canvasPut);
+  await lPage.click(".cloud-retry");
+  await lPage.waitForFunction(() => document.querySelector(".cloud-chip")?.dataset.state === "saved", null, { timeout: 20000 });
+  check("'try again' saves once the server answers", await lPage.evaluate(() => document.querySelector(".cloud-alert").hidden));
+  // Take the test shape back out, so the canvas holds what the rest expects.
+  await lPage.evaluate(() => window.axdraw.undo());
+  await lPage.waitForTimeout(500);
+  await lPage.evaluate(() => window.axdraw.saveNow());
+  await lPage.waitForFunction(() => window.axdraw.cloud.status === "saved" && !window.axdraw.cloud.pushing.size, null, { timeout: 20000 });
+
+  // After a reload, switching between unchanged canvases uploads nothing.
+  await lPage.reload({ waitUntil: "networkidle" });
+  await lPage.waitForFunction(() => window.axdraw?.cloud.status === "saved", null, { timeout: 20000 });
+  const puts = [];
+  const countPut = (request) => {
+    if (request.method() === "PUT" && canvasPut.test(request.url()) && !request.url().endsWith("/_rooms")) puts.push(request.url());
+  };
+  lPage.on("request", countPut);
+  const others = await lPage.evaluate(() => window.axdraw.listBoards().map((b) => b.id).filter((id) => id !== window.axdraw.currentBoardId()));
+  const here = await lPage.evaluate(() => window.axdraw.currentBoardId());
+  await lPage.evaluate((id) => window.axdraw.openBoard(id), others[0]);
+  await lPage.waitForTimeout(1500);
+  await lPage.evaluate((id) => window.axdraw.openBoard(id), here);
+  await lPage.waitForTimeout(4000);
+  lPage.off("request", countPut);
+  check("reopening unchanged canvases after a reload uploads nothing", puts.length === 0, puts.join(", "));
+
   // Another device: nothing but the email and password.
   const tablet = await profile("tablet");
   const tabPage = await tablet.open();
