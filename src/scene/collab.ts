@@ -38,7 +38,9 @@ const CURSOR_THROTTLE_MS = 50;
 // Only the person drawing saves, and only this often. A full-scene save
 // carries everyone's merged work, so one artist's saves cover the room; a
 // save per participant per edit would multiply writes for no extra safety.
-const SAVE_THROTTLE_MS = 15000;
+// Five seconds: the room now refuses a save built on an outdated copy, so
+// saving more often no longer risks one person's upload burying another's.
+const SAVE_THROTTLE_MS = 5000;
 // Backoff for a restore that reads a miss, covering KV's propagation delay.
 const RESTORE_RETRY_MS = [1500, 3000, 5000];
 
@@ -74,6 +76,14 @@ export class CollabSession {
   private cursorLayer: HTMLElement;
   private sceneTimer: number | null = null;
   private saveTimer: number | null = null;
+  /**
+   * The room's save version this copy is built on, sent with every save so
+   * the room can refuse one made from an outdated copy. null until known, or
+   * when the server predates versions — then saves go up unconditionally.
+   */
+  private savedVersion: number | null = null;
+  private saving = false;
+  private saveAgain = false;
   private restored = false;
   private broadcastPending = false;
   private framePending = false;
@@ -144,7 +154,8 @@ export class CollabSession {
     for (const wait of RESTORE_RETRY_MS) {
       if (this.closed) return;
       try {
-        const response = await fetch(`${API_BASE}/api/rooms/${this.roomId}/scene`);
+        const response = await fetch(`${API_BASE}/api/rooms/${this.roomId}/scene`, { cache: "no-store" });
+        this.noteVersion(response);
         if (response.ok) {
           const scene = await decryptJson<{ elements: AxElement[]; files: BinaryFiles }>(
             this.key,
@@ -233,30 +244,98 @@ export class CollabSession {
     }, SAVE_THROTTLE_MS);
   }
 
+  /**
+   * Whether this tab is live in the room right now. A tab being closed has no
+   * time to merge after a refusal; if it is connected it has been taking in
+   * everyone's changes as they happened, so its copy is current and its last
+   * save goes up unconditionally. A tab that lost the room still gets checked.
+   */
+  private connectedNow(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  private noteVersion(response: Response): void {
+    const header = response.headers.get("x-room-version");
+    if (header !== null && Number.isFinite(Number(header))) this.savedVersion = Number(header);
+  }
+
+  /**
+   * Fetches the room's newer save and merges it in, after the room refused
+   * ours. The room cannot read the scene, so the merge happens here.
+   */
+  private async catchUp(): Promise<boolean> {
+    if (!this.key) return false;
+    const response = await fetch(`${API_BASE}/api/rooms/${this.roomId}/scene`, { cache: "no-store" });
+    if (this.closed) return false;
+    this.noteVersion(response);
+    if (!response.ok) return response.status === 404;
+    const scene = await decryptJson<{ elements: AxElement[]; files: BinaryFiles }>(this.key, await response.arrayBuffer());
+    if (this.closed) return false;
+    if (Array.isArray(scene.elements) && scene.elements.length) {
+      this.app.applyRemoteScene(scene.elements, scene.files ?? {});
+    }
+    return true;
+  }
+
   private async saveScene(unloading = false): Promise<void> {
     if (!this.key || this.closed) return;
     // Never write before knowing what is already there — see restoreSaved().
     if (!this.restored) return;
+    if (this.saving && !unloading) {
+      this.saveAgain = true;
+      return;
+    }
+    this.saving = true;
+    // Read before any await: closing the tab closes the socket meanwhile.
+    const liveAtStart = this.connectedNow();
     try {
-      // Deletions are saved too. Without them a returning collaborator's
-      // older copy of an erased shape has nothing newer to lose to, and the
-      // shape reappears for everyone.
-      const payload = await encryptJson(this.key, {
-        elements: this.app.elements,
-        files: this.app.files,
-      });
-      await fetch(`${API_BASE}/api/rooms/${this.roomId}/scene`, {
-        method: "PUT",
-        headers: { "content-type": "application/octet-stream" },
-        body: payload,
-        // A request started during unload is cancelled with the page unless
-        // it is marked keepalive. Bodies over ~64 KiB are rejected outright,
-        // which is why the hidden-tab flush below matters more.
-        ...(unloading ? { keepalive: true } : {}),
-      });
+      // Unloading gets one try: there is no time to merge and retry.
+      for (let attempt = 0; attempt < (unloading ? 1 : 3); attempt++) {
+        // Deletions are saved too. Without them a returning collaborator's
+        // older copy of an erased shape has nothing newer to lose to, and the
+        // shape reappears for everyone.
+        const payload = await encryptJson(this.key, {
+          elements: this.app.elements,
+          files: this.app.files,
+        });
+        // A tab being closed closes the session too, and that last save is
+        // the one that matters most: send it regardless.
+        if (this.closed && !unloading) return;
+        const response = await fetch(`${API_BASE}/api/rooms/${this.roomId}/scene`, {
+          method: "PUT",
+          headers: {
+            "content-type": "application/octet-stream",
+            ...(this.savedVersion !== null && !(unloading && liveAtStart)
+              ? { "x-base-version": String(this.savedVersion) }
+              : {}),
+          },
+          body: payload,
+          // A request started during unload is cancelled with the page unless
+          // it is marked keepalive. Bodies over ~64 KiB are rejected outright,
+          // which is why the hidden-tab flush below matters more.
+          ...(unloading ? { keepalive: true } : {}),
+        });
+        if (response.status === 409) {
+          // Someone saved since this copy was loaded: take their save, then
+          // save the union. Overwriting it is how work used to get lost.
+          if (!(await this.catchUp())) return;
+          continue;
+        }
+        if (response.ok) {
+          const result = (await response.json().catch(() => null)) as { version?: number } | null;
+          if (typeof result?.version === "number") this.savedVersion = result.version;
+        }
+        return;
+      }
     } catch {
       // Offline, or a keepalive body over the cap. The visibility flush and
       // the next commit both get another chance.
+    } finally {
+      this.saving = false;
+      if (this.saveAgain) {
+        this.saveAgain = false;
+        this.queueSave();
+      }
     }
   }
 

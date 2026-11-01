@@ -8,8 +8,8 @@
  *
  *   POST /api/scenes             body: iv‖ciphertext   → { "id": "…" }
  *   GET  /api/scenes/:id                               → the same bytes
- *   PUT  /api/rooms/:id/scene    body: iv‖ciphertext   → { "ok": true }
- *   GET  /api/rooms/:id/scene                          → the same bytes
+ *   PUT  /api/rooms/:id/scene    body: iv‖ciphertext, x-base-version → { ok, version } | 409
+ *   GET  /api/rooms/:id/scene                          → the same bytes, x-room-version
  *
  *   POST   /api/cloud/register      email + consents     → { "workspace": "…" }
  *   GET    /api/cloud/canvases      (Bearer)             → [{ id, name, updated }]
@@ -30,7 +30,7 @@ const CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
   "access-control-allow-headers": "content-type, x-ai-key, authorization, x-canvas-name, x-base-version",
-  "access-control-expose-headers": "x-room-store, x-canvas-updated",
+  "access-control-expose-headers": "x-room-store, x-room-version, x-canvas-updated",
 };
 
 function randomId(length = 10) {
@@ -48,23 +48,91 @@ function json(data, status = 200) {
 }
 
 /**
- * A collaboration room: relays every WebSocket frame to all other sockets in
- * the same room. Frames are opaque encrypted bytes (the key never leaves the
- * clients' URL fragments), so the room needs no logic beyond fan-out. Uses
- * the hibernation API so idle rooms cost nothing.
+ * A collaboration room.
+ *
+ * Relays every WebSocket frame to all other sockets in the same room. Frames
+ * are opaque encrypted bytes (the key never leaves the clients' URL
+ * fragments), so fan-out is all the relay does with them. Uses the
+ * hibernation API so idle rooms cost nothing.
+ *
+ * It is also the one door to the room's saved scene. Saves used to go
+ * straight to R2 and the last one simply won: a participant whose connection
+ * had dropped for a while could upload an older copy over everyone's newer
+ * work. Now every save names the version it was built on; the room accepts it
+ * only if that is still the latest, one save at a time, and otherwise answers
+ * 409 so the browser merges the newer copy in (it can read it, the room
+ * cannot) and saves the union. The scene itself still lives in R2 (or KV on
+ * old deploys): the room keeps just the version number.
  */
 export class Room {
-  constructor(state) {
+  constructor(state, env) {
     this.state = state;
+    this.env = env;
+    this.queue = Promise.resolve();
   }
 
   async fetch(request) {
+    const url = new URL(request.url);
+    const scene = /^\/api\/rooms\/([A-Za-z0-9]+)\/scene$/.exec(url.pathname);
+    if (scene) return this.scene(request, scene[1]);
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("Expected a WebSocket", { status: 426 });
     }
     const pair = new WebSocketPair();
     this.state.acceptWebSocket(pair[1]);
     return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  /** Runs saves one after another: R2 writes are not covered by input gates. */
+  serial(task) {
+    const run = this.queue.then(task, task);
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  async version() {
+    return (await this.state.storage.get("version")) ?? 0;
+  }
+
+  async scene(request, id) {
+    if (request.method === "GET") {
+      // Version first, then the scene: a save landing in between hands out a
+      // newer scene under an older number, which only costs one extra merge —
+      // never the other way round, which could skip a merge.
+      const version = await this.version();
+      const body = await getRoomScene(this.env, id);
+      const headers = {
+        "x-room-store": roomStoreName(this.env),
+        "x-room-version": String(version),
+        ...CORS_HEADERS,
+      };
+      if (!body) {
+        return new Response(JSON.stringify({ error: "not found" }), {
+          status: 404,
+          headers: { "content-type": "application/json", ...headers },
+        });
+      }
+      return new Response(body, {
+        headers: { "content-type": "application/octet-stream", "cache-control": "no-store", ...headers },
+      });
+    }
+    if (request.method !== "PUT") return json({ error: "method not allowed" }, 405);
+    const body = await request.arrayBuffer();
+    if (body.byteLength === 0) return json({ error: "empty body" }, 400);
+    if (body.byteLength > MAX_BYTES) return json({ error: "too large" }, 413);
+    const baseHeader = request.headers.get("x-base-version");
+    return this.serial(async () => {
+      const current = await this.version();
+      // No header: a page from before versions existed. It still saves —
+      // refusing would lose its work — and reloads into the new code soon.
+      if (baseHeader !== null && Number(baseHeader) !== current) {
+        return json({ error: "conflict", version: current }, 409);
+      }
+      await putRoomScene(this.env, id, body);
+      const next = current + 1;
+      await this.state.storage.put("version", next);
+      return json({ ok: true, version: next });
+    });
   }
 
   webSocketMessage(ws, message) {
@@ -847,6 +915,13 @@ export default {
       // same opaque ciphertext as a share: the key lives in the room link's
       // fragment and never reaches the Worker.
       const roomScene = /^\/api\/rooms\/([A-Za-z0-9]+)\/scene$/.exec(url.pathname);
+      if (roomScene && env.ROOMS && (request.method === "GET" || request.method === "PUT")) {
+        if (request.method === "PUT" && Number(request.headers.get("content-length") ?? 0) > MAX_BYTES) {
+          return json({ error: "too large" }, 413);
+        }
+        // The room's own object orders its saves; see Room.scene().
+        return env.ROOMS.get(env.ROOMS.idFromName(roomScene[1])).fetch(request);
+      }
       if (roomScene) {
         const id = roomScene[1];
         if (request.method === "PUT") {
