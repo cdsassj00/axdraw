@@ -29,6 +29,9 @@ import {
   parsePayload,
   readFileAsDataURL,
   readFileAsText,
+  payloadFromHtml,
+  payloadHtml,
+  type ClipboardPicture,
 } from "./clipboard";
 import {
   ANGLE_SNAP,
@@ -122,7 +125,7 @@ import {
   type LaserPoint,
   type SnapLine,
 } from "./scene/interactive";
-import { renderStaticScene, screenToScene, type Viewport } from "./scene/renderer";
+import { renderActiveLayer, renderStaticScene, screenToScene, type Viewport } from "./scene/renderer";
 import {
   appendToBoard,
   boardSceneKey,
@@ -211,6 +214,13 @@ export class App implements CloudHost {
   readonly container: HTMLElement;
   readonly staticCanvas: HTMLCanvasElement;
   readonly interactiveCanvas: HTMLCanvasElement;
+  /** The shape being drawn, painted alone so the scene below can stay put. */
+  private readonly activeCanvas: HTMLCanvasElement;
+  /** What the scene canvas last showed while a shape was being drawn. */
+  private staticKey: string | null = null;
+  private staticSource: readonly AxElement[] | null = null;
+  private activeLayerDirty = false;
+  private imageEpoch = 0;
   readonly overlay: HTMLDivElement;
 
   elements: AxElement[] = [];
@@ -272,6 +282,8 @@ export class App implements CloudHost {
 
     this.staticCanvas = document.createElement("canvas");
     this.staticCanvas.className = "ax-canvas ax-canvas--static";
+    this.activeCanvas = document.createElement("canvas");
+    this.activeCanvas.className = "ax-canvas ax-canvas--active";
     this.interactiveCanvas = document.createElement("canvas");
     this.interactiveCanvas.className = "ax-canvas ax-canvas--interactive";
     // Focusable so UI layers can hand focus back to the canvas. Without this,
@@ -283,6 +295,7 @@ export class App implements CloudHost {
     this.overlay.className = "ax-overlay";
 
     container.appendChild(this.staticCanvas);
+    container.appendChild(this.activeCanvas);
     container.appendChild(this.interactiveCanvas);
     container.appendChild(this.overlay);
 
@@ -435,7 +448,8 @@ export class App implements CloudHost {
     const dpr = window.devicePixelRatio || 1;
     const width = this.container.clientWidth;
     const height = this.container.clientHeight;
-    for (const canvas of [this.staticCanvas, this.interactiveCanvas]) {
+    this.staticKey = null;
+    for (const canvas of [this.staticCanvas, this.activeCanvas, this.interactiveCanvas]) {
       canvas.width = Math.max(1, Math.floor(width * dpr));
       canvas.height = Math.max(1, Math.floor(height * dpr));
       canvas.style.width = `${width}px`;
@@ -458,15 +472,46 @@ export class App implements CloudHost {
     const dpr = window.devicePixelRatio || 1;
     const viewport = this.viewport;
 
-    renderStaticScene(this.staticCanvas, this.renderElementsForDisplay(), this.files, {
+    const sceneConfig = {
       ...viewport,
       theme: this.state.theme,
       viewBackgroundColor: this.state.viewBackgroundColor,
       gridEnabled: this.state.gridEnabled,
       gridSize: this.state.gridSize,
       devicePixelRatio: dpr,
-      onImageLoad: () => this.scheduleRender(),
-    });
+      onImageLoad: () => {
+        this.imageEpoch++;
+        this.scheduleRender();
+      },
+    };
+    // A brand-new shape or pen stroke is always the topmost element, so it can
+    // be painted on its own layer above the rest without changing what anyone
+    // sees — and the rest is repainted only when something else changes.
+    const mode = this.pointerMode;
+    const active = mode.type === "freedraw" || mode.type === "draw" ? mode.element : null;
+    const displayed = this.renderElementsForDisplay();
+    if (active && displayed[displayed.length - 1] === active) {
+      const below = displayed.slice(0, -1);
+      const key = [
+        active.id, viewport.scrollX, viewport.scrollY, viewport.zoom, viewport.width, viewport.height, dpr,
+        this.state.theme, this.state.viewBackgroundColor, this.state.gridEnabled, this.state.gridSize, this.imageEpoch,
+      ].join("|");
+      if (key !== this.staticKey || this.staticSource !== this.elements) {
+        renderStaticScene(this.staticCanvas, below, this.files, sceneConfig);
+        this.staticKey = key;
+        this.staticSource = this.elements;
+      }
+      renderActiveLayer(this.activeCanvas, [active], this.files, sceneConfig);
+      this.activeLayerDirty = true;
+    } else {
+      renderStaticScene(this.staticCanvas, displayed, this.files, sceneConfig);
+      this.staticKey = null;
+      this.staticSource = null;
+      if (this.activeLayerDirty) {
+        renderActiveLayer(this.activeCanvas, [], this.files, sceneConfig);
+        this.activeLayerDirty = false;
+      }
+    }
 
     const selected = this.getSelectedElements();
     const showHandles =
@@ -1285,10 +1330,19 @@ export class App implements CloudHost {
   private updateFreedraw(scene: Point, event: PointerEvent): void {
     if (this.pointerMode.type !== "freedraw") return;
     const element = this.pointerMode.element;
-    const points = [...element.points, [scene.x - element.x, scene.y - element.y] as [number, number]];
+    // A fast hand moves further between frames than one event shows; the
+    // browser keeps the in-between samples, and without them a quick curve
+    // is drawn through fewer points than it was made of.
+    const samples = event.getCoalescedEvents?.() ?? [];
+    const steps = samples.length > 1 ? samples : [event];
+    const added = steps.map((step) => {
+      const at = step === event ? scene : this.clientToScene(step.clientX, step.clientY);
+      return [at.x - element.x, at.y - element.y] as [number, number];
+    });
+    const points = [...element.points, ...added];
     const pressures = element.simulatePressure
       ? element.pressures
-      : [...element.pressures, event.pressure];
+      : [...element.pressures, ...steps.map((step) => step.pressure)];
     mutateElement(element, { points, pressures });
     normalizePoints(element);
     this.scheduleRender();
@@ -2248,15 +2302,50 @@ export class App implements CloudHost {
    * Clipboard & files
    * ---------------------------------------------------------------- */
 
+  /**
+   * A picture of the selection for the clipboard. Made synchronously, so the
+   * copy event itself can carry it even where the async clipboard is refused.
+   * Scale 2 for sharp slides, dropped to 1 for very large selections so a
+   * copy never stalls the page.
+   */
+  private clipboardPicture(elements: readonly AxElement[]): ClipboardPicture | null {
+    try {
+      const options = {
+        exportBackground: true,
+        viewBackgroundColor: this.state.viewBackgroundColor,
+        scale: 2,
+        theme: this.state.theme,
+      };
+      let canvas = exportToCanvas(elements, this.files, options);
+      if (canvas.width * canvas.height > 16_000_000) canvas = exportToCanvas(elements, this.files, { ...options, scale: 1 });
+      if (canvas.width * canvas.height > 32_000_000) return null;
+      const dataUrl = canvas.toDataURL("image/png");
+      const png = fetch(dataUrl).then((response) => response.blob()).catch(() => null);
+      return { dataUrl, png };
+    } catch {
+      return null;
+    }
+  }
+
+  private copyToClipboard(event: ClipboardEvent, selected: readonly AxElement[]): void {
+    event.preventDefault();
+    const payload = buildPayload(selected, this.files);
+    const picture = this.clipboardPicture(selected);
+    // The event's own data first: it always lands, even where the async
+    // clipboard below is refused. No plain-text flavour when there is a
+    // picture: chat apps and slides took the shapes' JSON over the image.
+    event.clipboardData?.setData("text/html", payloadHtml(payload, picture));
+    if (!picture) event.clipboardData?.setData("text/plain", JSON.stringify(payload));
+    // Then the PNG flavour as well, which only the async clipboard can write.
+    void copyElements(selected, this.files, picture);
+  }
+
   private handleCopyEvent = (event: ClipboardEvent): void => {
     const target = event.target as HTMLElement | null;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
     const selected = this.getSelectedElements();
     if (!selected.length) return;
-    event.preventDefault();
-    const payload = buildPayload(selected, this.files);
-    event.clipboardData?.setData("text/plain", JSON.stringify(payload));
-    void copyElements(selected, this.files);
+    this.copyToClipboard(event, selected);
   };
 
   private handleCutEvent = (event: ClipboardEvent): void => {
@@ -2264,10 +2353,7 @@ export class App implements CloudHost {
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
     const selected = this.getSelectedElements();
     if (!selected.length) return;
-    event.preventDefault();
-    const payload = buildPayload(selected, this.files);
-    event.clipboardData?.setData("text/plain", JSON.stringify(payload));
-    void copyElements(selected, this.files);
+    this.copyToClipboard(event, selected);
     this.deleteSelection();
   };
 
@@ -2275,6 +2361,15 @@ export class App implements CloudHost {
     const target = event.target as HTMLElement | null;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
     if (this.textEditor.isEditing) return;
+
+    // Shapes copied from axdraw travel with a picture of themselves; here the
+    // shapes win, so a copy pastes back editable rather than as an image.
+    const own = payloadFromHtml(event.clipboardData?.getData("text/html") ?? "");
+    if (own) {
+      event.preventDefault();
+      this.pasteElements(own.elements, own.files);
+      return;
+    }
 
     const items = event.clipboardData?.items ?? [];
     for (const item of items) {
@@ -2759,7 +2854,7 @@ export class App implements CloudHost {
 
   copySelection(): void {
     const selected = this.getSelectedElements();
-    if (selected.length) void copyElements(selected, this.files);
+    if (selected.length) void copyElements(selected, this.files, this.clipboardPicture(selected));
   }
 
   cutSelection(): void {

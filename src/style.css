@@ -78,6 +78,12 @@ body {
   z-index: 1;
 }
 
+/* Same layer as the scene, painted after it: the shape being drawn. */
+.ax-canvas--active {
+  z-index: 1;
+  pointer-events: none;
+}
+
 .ax-canvas--interactive {
   z-index: 2;
 }

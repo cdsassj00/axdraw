@@ -442,6 +442,74 @@ try {
     JSON.stringify(exportSize),
   );
 
+  /* ---------------- drawing stays smooth on a busy canvas ---------------- */
+
+  // Every pen move used to repaint every shape on the canvas: on a busy board
+  // and a high-density screen that is tens of milliseconds a move, and the
+  // stroke stutters. The shape being drawn now has its own layer.
+  const kept = await page.evaluate(() => {
+    const app = window.axdraw;
+    const kept = app.elements;
+    const busy = [];
+    for (let i = 0; i < 300; i++) {
+      busy.push({ id: `busy-${i}`, type: "rectangle", x: (i % 20) * 50, y: Math.floor(i / 20) * 50, width: 40, height: 40,
+        angle: 0, strokeColor: "#1e1e1e", backgroundColor: "#a5d8ff", fillStyle: "hachure", strokeWidth: 2,
+        strokeStyle: "solid", roughness: 1, opacity: 100, groupIds: [], frameId: null, roundness: null, seed: i + 1,
+        version: 1, versionNonce: 1, isDeleted: false, boundElements: null, updated: 1, link: null, locked: false });
+    }
+    app.elements = busy;
+    app.commit();
+    window.__keptForDraw = kept;
+    const scene = document.querySelector(".ax-canvas--static").getContext("2d");
+    window.__sceneRepaints = 0;
+    const clear = scene.clearRect.bind(scene);
+    scene.clearRect = (...args) => { window.__sceneRepaints++; return clear(...args); };
+    return kept.length;
+  });
+  void kept;
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("p");
+  await page.mouse.move(400, 400);
+  await page.mouse.down();
+  await page.evaluate(() => { window.__sceneRepaints = 0; });
+  for (let i = 0; i < 40; i++) {
+    await page.mouse.move(400 + i * 8, 400 + Math.sin(i / 4) * 60);
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+  }
+  const midStroke = await page.evaluate(() => {
+    const active = document.querySelector(".ax-canvas--active");
+    const data = active.getContext("2d").getImageData(0, 0, active.width, active.height).data;
+    let inked = 0;
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 0) inked++;
+    return { repaints: window.__sceneRepaints, inked };
+  });
+  await page.mouse.up();
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  const afterStroke = await page.evaluate(() => {
+    const app = window.axdraw;
+    const active = document.querySelector(".ax-canvas--active");
+    const data = active.getContext("2d").getImageData(0, 0, active.width, active.height).data;
+    let inked = 0;
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 0) inked++;
+    // Shape recognition (on from an earlier test) may turn it into a line.
+    const stroke = app.elements.filter((e) => !e.id.startsWith("busy-") && !e.isDeleted).length;
+    app.elements = window.__keptForDraw;
+    app.commit();
+    return { inked, stroke };
+  });
+  check(
+    "drawing a pen stroke does not repaint every other shape on each move",
+    midStroke.repaints <= 2 && midStroke.inked > 0,
+    JSON.stringify(midStroke),
+  );
+  check(
+    "the finished stroke joins the canvas and its drawing layer is cleared",
+    afterStroke.inked === 0 && afterStroke.stroke === 1,
+    JSON.stringify(afterStroke),
+  );
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("v");
+
   /* ---------------- scene file round trip ---------------- */
 
   const roundTrip = await page.evaluate(async () => {
@@ -2035,6 +2103,63 @@ try {
       await mobile.locator(".cloud-email").isVisible(),
     );
     await phone.close();
+  }
+
+  /* ---------------- Ctrl+C copies a picture too ---------------- */
+
+  // Copying a diagram should paste into a slide or a chat as an image, with
+  // no "copy as PNG" detour — and still paste back into axdraw as shapes.
+  {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: BASE });
+    const copier = await context.newPage();
+    copier.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
+    await copier.goto(BASE, { waitUntil: "networkidle" });
+    await copier.waitForFunction(() => Boolean(window.axdraw));
+    await copier.evaluate(() => document.querySelector(".welcome")?.remove());
+    await copier.evaluate(() => {
+      const app = window.axdraw;
+      const base = { angle: 0, strokeColor: "#1e1e1e", backgroundColor: "transparent", fillStyle: "solid",
+        strokeWidth: 2, strokeStyle: "solid", roughness: 1, opacity: 100, groupIds: [], frameId: null,
+        roundness: null, seed: 1, version: 1, versionNonce: 1, isDeleted: false, boundElements: null,
+        updated: 1, link: null, locked: false };
+      app.elements = [
+        { ...base, id: "copy-a", type: "rectangle", x: 100, y: 100, width: 160, height: 90 },
+        { ...base, id: "copy-b", type: "ellipse", x: 320, y: 100, width: 140, height: 90 },
+      ];
+      app.state.selectedIds = new Set(["copy-a", "copy-b"]);
+      app.commit();
+      document.querySelector(".ax-canvas--interactive").focus();
+    });
+    await copier.keyboard.press("Control+c");
+    await copier.waitForTimeout(600);
+    const flavours = await copier.evaluate(async () => {
+      const items = await navigator.clipboard.read();
+      const types = items.flatMap((item) => item.types);
+      let size = [0, 0];
+      if (types.includes("image/png")) {
+        const bitmap = await createImageBitmap(await items[0].getType("image/png"));
+        size = [bitmap.width, bitmap.height];
+      }
+      return { types, size };
+    });
+    check(
+      "Ctrl+C puts a picture of the selection on the clipboard",
+      flavours.types.includes("image/png") && flavours.types.includes("text/html") && flavours.size[0] > 300,
+      JSON.stringify(flavours),
+    );
+    await copier.keyboard.press("Control+v");
+    await copier.waitForTimeout(400);
+    const pasted = await copier.evaluate(() => {
+      const live = window.axdraw.elements.filter((e) => !e.isDeleted);
+      return { count: live.length, images: live.filter((e) => e.type === "image").length };
+    });
+    check(
+      "and pasting it back into axdraw gives editable shapes, not an image",
+      pasted.count === 4 && pasted.images === 0,
+      JSON.stringify(pasted),
+    );
+    await context.close();
   }
 
   check("no console or page errors", errors.length === 0, errors.join(" | "));
