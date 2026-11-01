@@ -227,6 +227,32 @@ function renderImage(
   ctx.drawImage(image, element.x, element.y, element.width, element.height);
 }
 
+/**
+ * Paints only the shape being drawn, on its own transparent canvas above the
+ * scene. While a pen stroke or a new shape is under the pointer nothing else
+ * changes, so repainting every other shape on each pointer move — millions
+ * of pixels on a high-density screen — was wasted work, and what made
+ * drawing on a busy canvas stutter. Dark mode is a CSS filter on that canvas,
+ * matching the filtered composite of the scene below.
+ */
+export function renderActiveLayer(
+  canvas: HTMLCanvasElement,
+  elements: readonly AxElement[],
+  files: BinaryFiles,
+  config: StaticRenderConfig,
+): void {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  canvas.style.filter = config.theme === "dark" ? THEME_FILTER : "";
+  if (!elements.length) return;
+  applyViewport(ctx, config);
+  for (const element of elements) {
+    if (!element.isDeleted) renderElement(ctx, element, files, config.onImageLoad);
+  }
+}
+
 let offscreen: HTMLCanvasElement | null = null;
 
 /** Repaint the element canvas. */
