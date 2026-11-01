@@ -463,6 +463,44 @@ try {
     JSON.stringify(views.map((v) => v.dragged)),
   );
 
+  // Someone whose connection quietly dropped keeps drawing on an older copy.
+  // Their save used to replace the room's newer one outright, erasing what
+  // everyone else drew meanwhile; now the room refuses it, their browser
+  // merges the newer save in, and both people's work is kept.
+  const host = await (await profile("conflict-host")).open();
+  await host.evaluate(() => window.axdraw.startCollab());
+  await host.waitForFunction(() => Boolean(window.axdraw.collab?.restored), null, { timeout: 10000 });
+  const conflictUrl = await host.evaluate(() => window.axdraw.collab.url);
+  const late = await (await profile("conflict-late")).open(conflictUrl);
+  await late.waitForFunction(() => Boolean(window.axdraw.collab?.restored), null, { timeout: 10000 });
+  // Cut off without noticing: nothing in, nothing out.
+  await late.evaluate(() => {
+    const ws = window.axdraw.collab.ws;
+    ws.onmessage = null;
+    ws.send = () => undefined;
+  });
+  await rect(host, [200, 200], [300, 280]);
+  await host.waitForTimeout(400);
+  await host.evaluate(() => window.axdraw.collab.flushSave());
+  await host.waitForTimeout(1500);
+  await rect(late, [500, 200], [600, 280]);
+  await late.waitForTimeout(400);
+  await late.evaluate(() => window.axdraw.collab.flushSave());
+  await late.waitForTimeout(2500);
+  const lateSees = (await live(late)).length;
+  await host.context().close();
+  await late.context().close();
+  const reader = await (await profile("conflict-reader")).open(conflictUrl);
+  await reader.waitForFunction(() => window.axdraw.elements.some((e) => !e.isDeleted), null, { timeout: 15000 }).catch(() => undefined);
+  await reader.waitForTimeout(1000);
+  const saved = (await live(reader)).length;
+  check(
+    "a save from an out-of-date copy merges instead of erasing others' work",
+    saved === 2 && lateSees === 2,
+    `room keeps ${saved}, the late browser shows ${lateSees}`,
+  );
+  await reader.context().close();
+
   // The sweep of empty canvases and dead room links.
   const tidy = await profile("tidy");
   const tPage2 = await tidy.open();
