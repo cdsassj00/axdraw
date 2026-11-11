@@ -2006,7 +2006,7 @@ try {
     await tabA.waitForTimeout(700);
     const counts = await tabA.evaluate(
       ([a, b]) => {
-        const live = (id) => JSON.parse(localStorage.getItem(`axdraw:scene:${id}`) || '{"elements":[]}').elements.filter((e) => !e.isDeleted).length;
+        const live = (id) => JSON.parse(window.axdrawStore.readScene(`axdraw:scene:${id}`) || '{"elements":[]}').elements.filter((e) => !e.isDeleted).length;
         return { a: live(a), b: live(b), field: document.querySelector(".board-name-input").value };
       },
       [boardA, boardB],
@@ -2034,7 +2034,7 @@ try {
     await tabA.mouse.up();
     await tabA.waitForTimeout(700);
     const same = await tabA.evaluate(
-      (id) => JSON.parse(localStorage.getItem(`axdraw:scene:${id}`)).elements.filter((e) => !e.isDeleted).length,
+      (id) => JSON.parse(window.axdrawStore.readScene(`axdraw:scene:${id}`)).elements.filter((e) => !e.isDeleted).length,
       boardA,
     );
     check("the same canvas in two tabs keeps both tabs' shapes", same === 3, `${same} saved`);
@@ -2158,6 +2158,85 @@ try {
       "and pasting it back into axdraw gives editable shapes, not an image",
       pasted.count === 4 && pasted.images === 0,
       JSON.stringify(pasted),
+    );
+    await context.close();
+  }
+
+  /* ---------------- a full browser store no longer loses canvases ---------------- */
+
+  // localStorage holds ~5-10 MB for the whole site. Once canvases with
+  // pictures filled it, every save failed silently and a new canvas lived only
+  // in the open tab. Canvases now live in IndexedDB; old ones move over.
+  {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+    const tab = await context.newPage();
+    tab.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
+    await tab.goto(BASE, { waitUntil: "networkidle" });
+    await tab.waitForFunction(() => Boolean(window.axdraw));
+    const seeded = await tab.evaluate(() => {
+      const rect = { id: "kept-1", type: "rectangle", x: 100, y: 100, width: 120, height: 80, angle: 0,
+        strokeColor: "#1e1e1e", backgroundColor: "transparent", fillStyle: "solid", strokeWidth: 2,
+        strokeStyle: "solid", roughness: 1, opacity: 100, groupIds: [], frameId: null, roundness: null,
+        seed: 1, version: 1, versionNonce: 1, isDeleted: false, boundElements: null, updated: Date.now(),
+        link: null, locked: false };
+      localStorage.setItem("axdraw:boards", JSON.stringify([{ id: "oldone", name: "예전 캔버스", updated: Date.now() }]));
+      localStorage.setItem("axdraw:scene:oldone", JSON.stringify({ version: 2, elements: [rect], files: {} }));
+      // A drawing that fell off the list: stored, but listed nowhere.
+      localStorage.setItem("axdraw:scene:lostone", JSON.stringify({ version: 2, elements: [{ ...rect, id: "lost-1" }], files: {} }));
+      localStorage.setItem("axdraw:board-current", "oldone");
+      sessionStorage.setItem("axdraw:board-tab", "oldone");
+      // Fill the rest with picture-heavy canvases, the way real browsers filled up.
+      const picture = "data:image/png;base64," + "A".repeat(400_000);
+      let fillers = 0;
+      try {
+        for (; fillers < 200; fillers++) {
+          localStorage.setItem(`axdraw:scene:filler${fillers}`, JSON.stringify({ version: 2, elements: [], files: { [`f${fillers}`]: { dataURL: picture } } }));
+        }
+      } catch {
+        // Full — exactly the state to test.
+      }
+      return fillers;
+    });
+    await tab.reload({ waitUntil: "networkidle" });
+    await tab.waitForFunction(() => Boolean(window.axdraw));
+    const moved = await tab.evaluate(() => ({
+      shown: window.axdraw.elements.filter((e) => !e.isDeleted).map((e) => e.id),
+      leftInLocalStorage: Object.keys(localStorage).filter((key) => key.startsWith("axdraw:scene:")).length,
+      inStore: window.axdrawStore.sceneKeys().filter((key) => key.startsWith("axdraw:scene:filler")).length,
+      recovered: window.axdraw.listBoards().filter((b) => b.name.startsWith("복구된 캔버스")).map((b) => b.id),
+    }));
+    check(
+      "a stored drawing missing from the canvas list comes back as a recovered canvas",
+      moved.recovered.length === 1 && moved.recovered[0] === "lostone",
+      JSON.stringify(moved.recovered),
+    );
+    check(
+      "canvases saved in a full localStorage move to IndexedDB and still open",
+      seeded > 3 && moved.shown.includes("kept-1") && moved.leftInLocalStorage === 0 && moved.inStore === seeded,
+      JSON.stringify({ seeded, ...moved }),
+    );
+    // A new canvas drawn now survives a reload — before, this is what vanished.
+    await tab.evaluate(() => window.axdraw.newBoard("행정안전부 블루특화과정"));
+    await tab.evaluate(() => document.querySelector(".welcome")?.remove());
+    await tab.keyboard.press("r");
+    await tab.mouse.move(400, 300);
+    await tab.mouse.down();
+    await tab.mouse.move(560, 400, { steps: 5 });
+    await tab.mouse.up();
+    await tab.evaluate(() => window.axdraw.saveNow());
+    await tab.waitForTimeout(500);
+    const fresh = await tab.evaluate(() => window.axdraw.currentBoardId());
+    await tab.reload({ waitUntil: "networkidle" });
+    await tab.waitForFunction(() => Boolean(window.axdraw));
+    const after = await tab.evaluate((id) => {
+      const board = window.axdraw.listBoards().find((b) => b.id === id);
+      if (board && window.axdraw.currentBoardId() !== id) window.axdraw.openBoard(id);
+      return { listed: Boolean(board), name: board?.name, shapes: window.axdraw.elements.filter((e) => !e.isDeleted).length };
+    }, fresh);
+    check(
+      "a canvas drawn after the store filled up is still there after a reload",
+      after.listed && after.shapes === 1,
+      JSON.stringify(after),
     );
     await context.close();
   }

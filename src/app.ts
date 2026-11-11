@@ -125,6 +125,7 @@ import {
   type LaserPoint,
   type SnapLine,
 } from "./scene/interactive";
+import { onSceneFromOtherTab, onStorageFailure } from "./scene/sceneStore";
 import { renderActiveLayer, renderStaticScene, screenToScene, type Viewport } from "./scene/renderer";
 import {
   appendToBoard,
@@ -651,7 +652,8 @@ export class App implements CloudHost {
       this.cloud.flush();
     });
     window.addEventListener("resize", () => this.resize());
-    window.addEventListener("storage", this.handleOtherTabSave);
+    onSceneFromOtherTab(this.handleOtherTabSave);
+    onStorageFailure((message) => this.reportStorageFailure(message));
     window.addEventListener("paste", this.handlePaste);
     window.addEventListener("copy", this.handleCopyEvent);
     window.addEventListener("cut", this.handleCutEvent);
@@ -668,11 +670,20 @@ export class App implements CloudHost {
    * too. Nothing is saved back from here: the merge changes only this tab's
    * memory, and its next own save writes the union.
    */
-  private handleOtherTabSave = (event: StorageEvent): void => {
-    if (!event.newValue || event.key !== boardSceneKey(currentBoardId())) return;
+  private lastStorageAlarm = 0;
+  /** A save failed in this browser: say so, at most once a minute. */
+  private reportStorageFailure(message: string): void {
+    const now = Date.now();
+    if (now - this.lastStorageAlarm < 60000) return;
+    this.lastStorageAlarm = now;
+    this.onError?.(t(message));
+  }
+
+  private handleOtherTabSave = (key: string, value: string): void => {
+    if (key !== boardSceneKey(currentBoardId())) return;
     let saved: { elements?: unknown[]; files?: BinaryFiles };
     try {
-      saved = JSON.parse(event.newValue);
+      saved = JSON.parse(value);
     } catch {
       return;
     }

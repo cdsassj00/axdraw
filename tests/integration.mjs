@@ -186,7 +186,7 @@ try {
   check("the shared drawing is all there", (await live(sPage)).length === 2, `${(await live(sPage)).length} elements`);
   check("and on screen, not off in the distance", (await onScreen(sPage)) >= 1, `${await onScreen(sPage)} on screen`);
   const ownStill = await sPage.evaluate(
-    (id) => JSON.parse(localStorage.getItem(`axdraw:scene:${id}`)).elements.filter((e) => !e.isDeleted).length,
+    (id) => JSON.parse(window.axdrawStore.readScene(`axdraw:scene:${id}`)).elements.filter((e) => !e.isDeleted).length,
     ownBoard,
   );
   check("the student's own canvas is untouched", ownStill === 1, `${ownStill} on their own canvas`);
@@ -235,7 +235,7 @@ try {
   const erased = (await live(tPage))[0];
   await sPage.waitForTimeout(1000); // let the student's copy reach their storage
   const staleCopy = await sPage.evaluate(
-    () => JSON.parse(localStorage.getItem(`axdraw:scene:${window.axdraw.currentBoardId()}`)).elements.filter((e) => !e.isDeleted).length,
+    () => JSON.parse(window.axdrawStore.readScene(`axdraw:scene:${window.axdraw.currentBoardId()}`)).elements.filter((e) => !e.isDeleted).length,
   );
   check("the student's browser holds a copy of the room", staleCopy === 2, `${staleCopy} stored`);
   await sPage.close();
@@ -301,7 +301,7 @@ try {
   await roomTab.waitForTimeout(800);
   const placed = await roomTab.evaluate(
     ([room, plain]) => {
-      const live = (id) => JSON.parse(localStorage.getItem(`axdraw:scene:${id}`) || '{"elements":[]}').elements.filter((e) => !e.isDeleted).length;
+      const live = (id) => JSON.parse(window.axdrawStore.readScene(`axdraw:scene:${id}`) || '{"elements":[]}').elements.filter((e) => !e.isDeleted).length;
       return {
         room: live(room),
         plain: live(plain),
@@ -343,7 +343,7 @@ try {
   const leaked = await hopPage.evaluate(
     (id) => ({
       onScreen: window.axdraw.elements.filter((e) => !e.isDeleted).length,
-      stored: JSON.parse(localStorage.getItem(`axdraw:scene:${id}`) || '{"elements":[]}').elements.filter((e) => !e.isDeleted).length,
+      stored: JSON.parse(window.axdrawStore.readScene(`axdraw:scene:${id}`) || '{"elements":[]}').elements.filter((e) => !e.isDeleted).length,
     }),
     fresh,
   );
