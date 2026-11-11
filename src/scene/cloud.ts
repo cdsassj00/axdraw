@@ -345,8 +345,8 @@ export async function pushCloudCanvas(
   const encryptedName = toBase64Url(await encryptBytes(key, new TextEncoder().encode(name)));
   const body = await encryptJson(key, scene);
   const bytes = body.byteLength;
-  // The server refuses anything over 20 MiB; say so without sending it first.
-  if (bytes > 20 * 1024 * 1024) throw new Error("This canvas is too large to save to the cloud");
+  // The server refuses anything over 90 MiB; say so without sending it first.
+  if (bytes > 90 * 1024 * 1024) throw new Error("This canvas is too large to save to the cloud");
   const response = await cloudFetch(
     `${API_BASE}/api/cloud/canvases/${id}`,
     {

@@ -25,6 +25,16 @@
  */
 
 const MAX_BYTES = 20 * 1024 * 1024; // KV values cap at 25 MiB; leave headroom.
+// Cloud canvases stream straight to R2, never held in memory, so they can be
+// far larger: up to just under the 100 MB a Worker request may carry.
+const CANVAS_MAX_BYTES = 90 * 1024 * 1024;
+
+/** A stream of exactly `length` bytes, which R2 needs to accept a stream. */
+function fixedLength(stream, length) {
+  const fixed = new FixedLengthStream(length);
+  stream.pipeTo(fixed.writable).catch(() => undefined);
+  return fixed.readable;
+}
 const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 const CORS_HEADERS = {
@@ -442,7 +452,8 @@ async function keepHistory(env, key) {
     const current = await env.ROOM_SCENES.get(key);
     if (!current) return;
     const added = `${prefix}${String(Date.now()).padStart(15, "0")}`;
-    await env.ROOM_SCENES.put(added, await current.arrayBuffer());
+    // Streamed: a 90 MB canvas plus its backup would not both fit in memory.
+    await env.ROOM_SCENES.put(added, fixedLength(current.body, current.size));
     const drop = historyToDrop([...stamps, added], Date.now());
     for (let i = 0; i < drop.length; i += 1000) await env.ROOM_SCENES.delete(drop.slice(i, i + 1000));
   } catch {
@@ -461,7 +472,7 @@ async function putCanvasBody(env, workspace, id, body) {
 async function getCanvasBody(env, workspace, id) {
   if (env.ROOM_SCENES) {
     const object = await env.ROOM_SCENES.get(canvasKey(workspace, id));
-    return object ? object.arrayBuffer() : null;
+    return object ? object.body : null;
   }
   return env.SCENES.get(canvasKey(workspace, id), { type: "arrayBuffer" });
 }
@@ -719,10 +730,18 @@ async function handleCloud(request, env, url) {
       const name = request.headers.get("x-canvas-name") ?? "";
       if (!/^[A-Za-z0-9_-]{1,2000}$/.test(name)) return json({ error: "invalid name" }, 400);
       const length = Number(request.headers.get("content-length") ?? 0);
-      if (length > MAX_BYTES) return json({ error: "too large" }, 413);
-      const body = await request.arrayBuffer();
-      if (body.byteLength === 0) return json({ error: "empty body" }, 400);
-      if (body.byteLength > MAX_BYTES) return json({ error: "too large" }, 413);
+      if (length > (env.ROOM_SCENES ? CANVAS_MAX_BYTES : MAX_BYTES)) return json({ error: "too large" }, 413);
+      let body;
+      let size;
+      if (env.ROOM_SCENES && length > 0 && request.body) {
+        body = fixedLength(request.body, length);
+        size = length;
+      } else {
+        body = await request.arrayBuffer();
+        size = body.byteLength;
+        if (size > MAX_BYTES) return json({ error: "too large" }, 413);
+      }
+      if (size === 0) return json({ error: "empty body" }, 400);
       // Strictly increasing even within one millisecond, so a device's own
       // previous save never looks newer than what it is building on.
       const updated = Math.max(now, (row?.updated_at ?? 0) + 1);
@@ -731,7 +750,7 @@ async function handleCloud(request, env, url) {
         `INSERT INTO canvases (workspace_id, id, name, size, updated_at) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(workspace_id, id) DO UPDATE SET name = excluded.name, size = excluded.size, updated_at = excluded.updated_at`,
       )
-        .bind(account.id, id, name, body.byteLength, updated)
+        .bind(account.id, id, name, size, updated)
         .run();
       return json({ ok: true, updated });
     }
