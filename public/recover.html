@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>axdraw 그림 복구</title>
+<style>
+  :root { --bg: #f8f7f4; --card: #fff; --text: #1e1e1e; --muted: #6b6b6b; --line: #e3e0da; --accent: #0071e3; --ok: #2f9e44; --warn: #e03131; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #18181a; --card: #222226; --text: #eee; --muted: #a0a0a0; --line: #38383d; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 28px 0 8px; }
+  p, li { color: var(--muted); }
+  code { background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 13px; word-break: break-all; color: var(--text); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 10px 0; }
+  .warn { border-color: var(--warn); }
+  .warn strong { color: var(--warn); }
+  label.pick { display: inline-block; background: var(--accent); color: #fff; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+  input[type=file] { display: none; }
+  #status { margin: 12px 0; font-weight: 600; }
+  .result { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+  .result h3 { margin: 0; font-size: 15px; }
+  .result .meta { font-size: 13px; color: var(--muted); }
+  .result .sample { font-size: 13px; margin-top: 4px; color: var(--text); }
+  .buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+  button { font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .done { color: var(--ok); font-weight: 600; font-size: 13px; }
+  .filter { margin: 8px 0; }
+  .filter input { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--text); width: min(360px, 100%); }
+</style>
+</head>
+<body>
+<main>
+  <h1>axdraw 그림 복구</h1>
+  <p>브라우저가 디스크에 남겨 둔 예전 저장 내용에서 사라진 그림을 찾습니다. 파일은 <strong>이 컴퓨터 안에서만</strong> 읽고, 어디로도 보내지 않습니다.</p>
+
+  <div class="card warn">
+    <strong>먼저 폴더를 복사하세요.</strong> 크롬이 켜져 있는 동안 이 폴더의 예전 내용은 조금씩 정리되어 사라집니다. 지금 바로 아래 폴더를 통째로 바탕화면 등에 <b>복사</b>한 뒤, 복사한 폴더를 고르세요.
+  </div>
+
+  <h2>1. 폴더 위치</h2>
+  <div class="card">
+    <p style="margin:0 0 6px">크롬 (Windows) — 주소창이 아니라 <b>파일 탐색기</b> 주소칸에 붙여넣으세요:</p>
+    <code>%LOCALAPPDATA%\Google\Chrome\User Data\Default\Local Storage\leveldb</code>
+    <p style="margin:10px 0 6px">엣지 (Windows):</p>
+    <code>%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Local Storage\leveldb</code>
+    <p style="margin:10px 0 6px">크롬 (Mac) — Finder에서 Cmd+Shift+G 후 붙여넣기:</p>
+    <code>~/Library/Application Support/Google/Chrome/Default/Local Storage/leveldb</code>
+    <p style="margin:10px 0 0">크롬 프로필을 여러 개 쓰면 <code>Default</code> 대신 <code>Profile 1</code>, <code>Profile 2</code> … 폴더에 있습니다.</p>
+  </div>
+
+  <h2>2. 복사한 leveldb 폴더 고르기</h2>
+  <label class="pick">폴더 고르기<input id="pick" type="file" webkitdirectory multiple></label>
+  <div id="status"></div>
+  <div class="filter" id="filterBox" hidden><input id="filter" placeholder="캔버스 이름이나 글자로 찾기 (예: 행정안전부)"></div>
+  <div id="results"></div>
+</main>
+<script>
+"use strict";
+// ---- LevelDB reading (Chrome keeps localStorage in LevelDB) ----
+function varint(buf, pos) {
+  let result = 0, mul = 1, b;
+  do { b = buf[pos.i++]; result += (b & 0x7f) * mul; mul *= 128; } while (b & 0x80 && pos.i < buf.length);
+  return result;
+}
+function snappy(input) {
+  const pos = { i: 0 };
+  const len = varint(input, pos);
+  const out = new Uint8Array(len);
+  let p = pos.i, op = 0;
+  while (p < input.length && op < len) {
+    const tag = input[p++];
+    const type = tag & 3;
+    if (type === 0) {
+      let l = tag >> 2;
+      if (l >= 60) { const n = l - 59; l = 0; for (let k = 0; k < n; k++) l |= input[p++] << (8 * k); }
+      l += 1;
+      out.set(input.subarray(p, p + l), op); p += l; op += l;
+    } else {
+      let length, offset;
+      if (type === 1) { length = ((tag >> 2) & 7) + 4; offset = ((tag >> 5) << 8) | input[p++]; }
+      else if (type === 2) { length = (tag >> 2) + 1; offset = input[p] | (input[p + 1] << 8); p += 2; }
+      else { length = (tag >> 2) + 1; offset = (input[p] | (input[p + 1] << 8) | (input[p + 2] << 16)) + input[p + 3] * 16777216; p += 4; }
+      if (!offset || offset > op) throw new Error("bad snappy");
+      for (let k = 0; k < length; k++) { out[op] = out[op - offset]; op++; }
+    }
+  }
+  return out;
+}
+function readBlock(file, offset, size) {
+  const raw = file.subarray(offset, offset + size);
+  const type = file[offset + size];
+  return type === 1 ? snappy(raw) : raw;
+}
+function blockEntries(block) {
+  const entries = [];
+  if (block.length < 4) return entries;
+  const dv = new DataView(block.buffer, block.byteOffset, block.byteLength);
+  const restarts = dv.getUint32(block.length - 4, true);
+  const end = block.length - 4 - restarts * 4;
+  const pos = { i: 0 };
+  let key = new Uint8Array(0);
+  while (pos.i < end) {
+    const shared = varint(block, pos), nonShared = varint(block, pos), valueLen = varint(block, pos);
+    const next = new Uint8Array(shared + nonShared);
+    next.set(key.subarray(0, shared));
+    next.set(block.subarray(pos.i, pos.i + nonShared), shared);
+    pos.i += nonShared;
+    key = next;
+    entries.push([key, block.subarray(pos.i, pos.i + valueLen)]);
+    pos.i += valueLen;
+  }
+  return entries;
+}
+function* tablePairs(file) {
+  if (file.length < 48) return;
+  const footer = file.subarray(file.length - 48);
+  const pos = { i: 0 };
+  varint(footer, pos); varint(footer, pos); // metaindex
+  const indexOffset = varint(footer, pos), indexSize = varint(footer, pos);
+  for (const [, handle] of blockEntries(readBlock(file, indexOffset, indexSize))) {
+    const hp = { i: 0 };
+    const off = varint(handle, hp), size = varint(handle, hp);
+    try {
+      for (const [key, value] of blockEntries(readBlock(file, off, size))) yield [key.subarray(0, Math.max(0, key.length - 8)), value];
+    } catch { /* a damaged block: skip it, keep the rest */ }
+  }
+}
+function* logPairs(file) {
+  const BLOCK = 32768;
+  let record = [];
+  for (let start = 0; start < file.length; start += BLOCK) {
+    let p = start;
+    while (p + 7 <= Math.min(start + BLOCK, file.length)) {
+      const length = file[p + 4] | (file[p + 5] << 8);
+      const type = file[p + 6];
+      if (type === 0 && length === 0) break;
+      const payload = file.subarray(p + 7, p + 7 + length);
+      p += 7 + length;
+      if (type === 1) record = [payload];
+      else if (type === 2) record = [payload];
+      else if (type === 3) record.push(payload);
+      else if (type === 4) record.push(payload);
+      else continue;
+      if (type === 1 || type === 4) {
+        const total = record.reduce((n, part) => n + part.length, 0);
+        const batch = new Uint8Array(total);
+        let o = 0; for (const part of record) { batch.set(part, o); o += part.length; }
+        record = [];
+        yield* batchPairs(batch);
+      }
+    }
+  }
+}
+function* batchPairs(batch) {
+  if (batch.length < 12) return;
+  const dv = new DataView(batch.buffer, batch.byteOffset, batch.byteLength);
+  const count = dv.getUint32(8, true);
+  const pos = { i: 12 };
+  for (let n = 0; n < count && pos.i < batch.length; n++) {
+    const tag = batch[pos.i++];
+    const keyLen = varint(batch, pos);
+    const key = batch.subarray(pos.i, pos.i + keyLen); pos.i += keyLen;
+    if (tag === 1) {
+      const valueLen = varint(batch, pos);
+      yield [key, batch.subarray(pos.i, pos.i + valueLen)];
+      pos.i += valueLen;
+    }
+  }
+}
+const latin1 = new TextDecoder("latin1"), utf16 = new TextDecoder("utf-16le");
+function decodeValue(bytes) {
+  if (!bytes.length) return "";
+  if (bytes[0] === 0) return utf16.decode(bytes.subarray(1));
+  if (bytes[0] === 1) return latin1.decode(bytes.subarray(1));
+  return latin1.decode(bytes);
+}
+function decodeKey(bytes) {
+  const text = latin1.decode(bytes);
+  if (!text.includes("axdraw")) return null;
+  const sep = text.indexOf("\u0000");
+  if (sep < 0) return null;
+  const rest = bytes.subarray(sep + 1);
+  return { origin: text.slice(0, sep).replace(/^_/, ""), key: decodeValue(rest) };
+}
+
+// ---- Collecting canvases ----
+const found = new Map(); // fingerprint -> candidate
+const names = new Map(); // board id -> name
+function consider(origin, key, value) {
+  if (key === "axdraw:boards") {
+    try { for (const b of JSON.parse(value)) if (b && b.id && b.name) names.set(b.id, b.name); } catch {}
+    return;
+  }
+  let id = null;
+  if (key.startsWith("axdraw:scene:")) id = key.slice("axdraw:scene:".length);
+  else if (key === "axdraw:scene") id = "(옛 캔버스)";
+  else if (key === "axdraw:journal") { try { const j = JSON.parse(value); key = j.key; value = j.value; id = String(key).slice("axdraw:scene:".length); } catch { return; } }
+  else return;
+  let scene;
+  try { scene = JSON.parse(value); } catch { return; }
+  const elements = Array.isArray(scene.elements) ? scene.elements : [];
+  const live = elements.filter((e) => e && !e.isDeleted);
+  if (!live.length) return;
+  const fingerprint = `${id}|${live.length}|${live.reduce((n, e) => n + (Number(e.version) || 0), 0)}`;
+  if (found.has(fingerprint)) return;
+  const newest = Math.max(0, ...elements.map((e) => Number(e.updated) || 0));
+  const texts = live.filter((e) => e.type === "text" && e.text).map((e) => String(e.text).replace(/\s+/g, " "));
+  found.set(fingerprint, { id, origin, live: live.length, newest, texts, scene: { elements, files: scene.files || {} } });
+}
+
+async function scan(files) {
+  found.clear(); names.clear();
+  const status = document.getElementById("status");
+  const list = [...files].filter((f) => /\.(log|ldb|sst)$/i.test(f.name));
+  if (!list.length) { status.textContent = "leveldb 폴더가 아닌 것 같습니다 — .ldb / .log 파일이 없습니다."; return; }
+  let done = 0;
+  for (const file of list) {
+    status.textContent = `읽는 중… ${++done} / ${list.length} (${file.name})`;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    try {
+      const pairs = /\.log$/i.test(file.name) ? logPairs(bytes) : tablePairs(bytes);
+      for (const [rawKey, rawValue] of pairs) {
+        const k = decodeKey(rawKey);
+        if (!k) continue;
+        consider(k.origin, k.key, decodeValue(rawValue));
+      }
+    } catch (error) { console.warn(file.name, error); }
+  }
+  status.textContent = found.size ? `예전 저장본 ${found.size}개를 찾았습니다. 도형이 많은 것부터 보여 줍니다.` : "axdraw 저장본을 찾지 못했습니다. 다른 프로필 폴더(Profile 1 등)나 다른 브라우저 폴더도 해 보세요.";
+  document.getElementById("filterBox").hidden = !found.size;
+  render();
+}
+
+function render() {
+  const q = document.getElementById("filter").value.trim();
+  const box = document.getElementById("results");
+  box.replaceChildren();
+  const items = [...found.values()]
+    .map((c) => ({ ...c, name: names.get(c.id) || `(이름 모름: ${c.id})` }))
+    .filter((c) => !q || c.name.includes(q) || c.texts.some((t) => t.includes(q)))
+    .sort((a, b) => b.live - a.live);
+  for (const c of items) {
+    const card = document.createElement("div");
+    card.className = "card result";
+    const info = document.createElement("div");
+    const title = document.createElement("h3"); title.textContent = c.name;
+    const meta = document.createElement("div"); meta.className = "meta";
+    meta.textContent = `도형 ${c.live}개 · 마지막 수정 ${c.newest ? new Date(c.newest).toLocaleString() : "알 수 없음"} · ${c.origin}`;
+    const sample = document.createElement("div"); sample.className = "sample";
+    sample.textContent = c.texts.slice(0, 6).join(" / ").slice(0, 160);
+    info.append(title, meta, sample);
+    const buttons = document.createElement("div"); buttons.className = "buttons";
+    const put = document.createElement("button"); put.className = "primary"; put.textContent = "axdraw에 새 캔버스로 넣기";
+    put.onclick = async () => {
+      put.disabled = true;
+      try { await importCanvas(c); put.replaceWith(Object.assign(document.createElement("span"), { className: "done", textContent: "넣었습니다 — axdraw를 새로고침하세요" })); }
+      catch (error) { put.disabled = false; alert("넣지 못했습니다: " + error.message + "\n'파일로 받기' 후 axdraw에서 열기(Ctrl+O)를 써 주세요."); }
+    };
+    const save = document.createElement("button"); save.textContent = "파일로 받기";
+    save.onclick = () => {
+      const blob = new Blob([JSON.stringify({ type: "excalidraw", version: 2, source: "axdraw-recover", elements: c.scene.elements, appState: {}, files: c.scene.files })], { type: "application/json" });
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${c.name.replace(/[\\/:*?"<>|]/g, "_")}-복구-${c.live}개.excalidraw`; a.click();
+    };
+    if (location.hostname !== "axdraw.org" && !/localhost|127\.0\.0\.1/.test(location.hostname)) put.disabled = true;
+    buttons.append(put, save);
+    card.append(info, buttons);
+    box.append(card);
+  }
+}
+
+// ---- Putting a recovered canvas back into axdraw (same site, same browser) ----
+function openDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("axdraw", 1);
+    req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains("scenes")) req.result.createObjectStore("scenes"); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error("IndexedDB"));
+  });
+}
+async function importCanvas(c) {
+  const id = Math.random().toString(36).slice(2, 10);
+  const value = JSON.stringify({ version: 2, elements: c.scene.elements, files: c.scene.files });
+  const db = await openDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction("scenes", "readwrite");
+    tx.objectStore("scenes").put(value, `axdraw:scene:${id}`);
+    tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error);
+  });
+  const boards = JSON.parse(localStorage.getItem("axdraw:boards") || "[]");
+  const when = c.newest ? new Date(c.newest) : new Date();
+  boards.push({ id, name: `${c.name} (복구 ${when.getMonth() + 1}/${when.getDate()} ${String(when.getHours()).padStart(2, "0")}:${String(when.getMinutes()).padStart(2, "0")})`, updated: Date.now() });
+  localStorage.setItem("axdraw:boards", JSON.stringify(boards));
+}
+
+document.getElementById("pick").addEventListener("change", (event) => void scan(event.target.files));
+document.getElementById("filter").addEventListener("input", render);
+// For tests: scan an array of {name, bytes} without a folder picker.
+window.__scanBuffers = (items) => scan(items.map((it) => ({ name: it.name, arrayBuffer: async () => new Uint8Array(it.bytes).buffer })));
+window.__found = () => [...found.values()].map((c) => ({ id: c.id, live: c.live, name: names.get(c.id) || null }));
+</script>
+</body>
+</html>
