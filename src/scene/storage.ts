@@ -2,6 +2,7 @@
 
 import { DEFAULT_STYLE, SCENE_VERSION, STORAGE_KEY, STORAGE_STATE_KEY } from "../constants";
 import type { AppState, AxElement, BinaryFiles, ItemStyle } from "../types";
+import { readScene, removeScene, report, sceneKeys, writeScene } from "./sceneStore";
 
 interface PersistedState {
   scrollX: number;
@@ -85,7 +86,9 @@ function writeIndex(boards: BoardMeta[]): void {
   try {
     localStorage.setItem(BOARDS_KEY, JSON.stringify(boards));
   } catch {
-    // Quota — boards keep working in memory.
+    // Without the list a canvas cannot be found again after a reload, and
+    // cloud saving cannot find it either. Never again silently.
+    report("This browser could not save the canvas — storage is full");
   }
 }
 
@@ -128,7 +131,7 @@ export function currentBoardId(): string {
     try {
       const legacy = localStorage.getItem(STORAGE_KEY);
       if (legacy) {
-        localStorage.setItem(sceneKey(id), legacy);
+        writeScene(sceneKey(id), legacy);
         localStorage.removeItem(STORAGE_KEY);
       }
     } catch {
@@ -189,7 +192,7 @@ export function appendToBoard(
   files: BinaryFiles,
 ): void {
   try {
-    const raw = localStorage.getItem(sceneKey(boardId));
+    const raw = readScene(sceneKey(boardId));
     const existing = raw
       ? (JSON.parse(raw) as { elements?: AxElement[]; files?: BinaryFiles })
       : { elements: [], files: {} };
@@ -198,10 +201,10 @@ export function appendToBoard(
       elements: [...(existing.elements ?? []), ...elements.filter((element) => !element.isDeleted)],
       files: { ...(existing.files ?? {}), ...files },
     };
-    localStorage.setItem(sceneKey(boardId), JSON.stringify(payload));
+    writeScene(sceneKey(boardId), JSON.stringify(payload));
     touchBoard(boardId);
   } catch {
-    // Quota or unavailable storage — the caller reports the failure.
+    // Unreadable stored copy — the caller reports the failure.
     throw new Error("Could not write to that canvas");
   }
 }
@@ -209,11 +212,11 @@ export function appendToBoard(
 /** Removes elements from a board that is not open — undo of appendToBoard. */
 export function removeFromBoard(boardId: string, ids: readonly string[]): void {
   try {
-    const raw = localStorage.getItem(sceneKey(boardId));
+    const raw = readScene(sceneKey(boardId));
     if (!raw) return;
     const parsed = JSON.parse(raw) as { elements?: AxElement[]; files?: BinaryFiles };
     const drop = new Set(ids);
-    localStorage.setItem(
+    writeScene(
       sceneKey(boardId),
       JSON.stringify({
         version: SCENE_VERSION,
@@ -228,11 +231,7 @@ export function removeFromBoard(boardId: string, ids: readonly string[]): void {
 
 export function deleteBoard(id: string): void {
   writeIndex(readIndex().filter((board) => board.id !== id));
-  try {
-    localStorage.removeItem(sceneKey(id));
-  } catch {
-    // Ignore.
-  }
+  removeScene(sceneKey(id));
 }
 
 /** Attaches (or with `undefined`, detaches) a room or share link to a board. */
@@ -253,7 +252,7 @@ export function addBoard(board: BoardMeta): void {
 /** Scene of a board that may not be open. */
 export function readBoardScene(boardId: string): { elements: AxElement[]; files: BinaryFiles } {
   try {
-    const raw = localStorage.getItem(sceneKey(boardId));
+    const raw = readScene(sceneKey(boardId));
     const parsed = raw ? (JSON.parse(raw) as { elements?: AxElement[]; files?: BinaryFiles }) : {};
     return { elements: Array.isArray(parsed.elements) ? parsed.elements : [], files: parsed.files ?? {} };
   } catch {
@@ -263,14 +262,7 @@ export function readBoardScene(boardId: string): { elements: AxElement[]; files:
 
 /** Writes the scene of a board that is not open. */
 export function writeBoardScene(boardId: string, elements: readonly AxElement[], files: BinaryFiles): void {
-  try {
-    localStorage.setItem(
-      sceneKey(boardId),
-      JSON.stringify({ version: SCENE_VERSION, elements: keepable(elements), files }),
-    );
-  } catch {
-    // Quota — the cloud copy is still there.
-  }
+  writeScene(sceneKey(boardId), JSON.stringify({ version: SCENE_VERSION, elements: keepable(elements), files }));
 }
 
 /**
@@ -317,7 +309,7 @@ export function saveScene(
       elements: keepable(elements),
       files,
     };
-    localStorage.setItem(sceneKey(currentBoardId()), JSON.stringify(payload));
+    writeScene(sceneKey(currentBoardId()), JSON.stringify(payload), true);
     touchBoard(currentBoardId());
 
     const persisted: PersistedState = {
@@ -339,13 +331,14 @@ export function saveScene(
     };
     localStorage.setItem(STORAGE_STATE_KEY, JSON.stringify(persisted));
   } catch {
-    // Quota exceeded (usually large pasted images) — keep working in memory.
+    // Settings only (the canvas went through writeScene, which reports its
+    // own failures): view position and style are not worth an alarm.
   }
 }
 
 export function loadScene(): LoadedScene | null {
   try {
-    const raw = localStorage.getItem(sceneKey(currentBoardId()));
+    const raw = readScene(sceneKey(currentBoardId()));
     const rawState = localStorage.getItem(STORAGE_STATE_KEY);
     const state: Partial<PersistedState> = rawState ? JSON.parse(rawState) : {};
     // Migration: only the new field carries the user's actual choice.
@@ -369,9 +362,34 @@ export function loadScene(): LoadedScene | null {
 }
 
 export function clearStoredScene(): void {
-  try {
-    localStorage.removeItem(sceneKey(currentBoardId()));
-  } catch {
-    // Ignore — nothing we can do if storage is unavailable.
+  removeScene(sceneKey(currentBoardId()));
+}
+
+/**
+ * Puts back canvases whose drawing is stored but which fell off the list.
+ *
+ * When the browser store was full, writing the list failed while a canvas's
+ * drawing had already been written (or the other way round, on a later
+ * save): the drawing stayed in the browser but no longer appeared anywhere.
+ * Every stored drawing that is not on the list and has something in it comes
+ * back as "복구된 캔버스". Returns how many were recovered.
+ */
+export function recoverOrphanedBoards(): number {
+  const listed = new Set(readIndex().map((board) => board.id));
+  const prefix = `${STORAGE_KEY}:`;
+  let recovered = 0;
+  for (const key of sceneKeys()) {
+    if (!key.startsWith(prefix)) continue;
+    const id = key.slice(prefix.length);
+    if (!id || listed.has(id)) continue;
+    const scene = readBoardScene(id);
+    const live = scene.elements.filter((element) => !element.isDeleted);
+    if (!live.length) continue;
+    const newest = Math.max(...live.map((element) => Number(element.updated) || 0));
+    const when = newest ? new Date(newest) : new Date();
+    const label = `${when.getMonth() + 1}/${when.getDate()} ${String(when.getHours()).padStart(2, "0")}:${String(when.getMinutes()).padStart(2, "0")}`;
+    addBoard({ id, name: `복구된 캔버스 (${label})`, updated: newest || Date.now() });
+    recovered++;
   }
+  return recovered;
 }

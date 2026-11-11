@@ -117,6 +117,7 @@ const ko: Dict = {
   "Could not list cloud canvases": "캔버스 목록을 불러오지 못했습니다",
   "Could not load the canvas from the cloud": "캔버스를 불러오지 못했습니다",
   "Could not delete the cloud copy": "클라우드 사본을 지우지 못했습니다",
+  "This browser could not save the canvas — storage is full": "이 브라우저에 캔버스를 저장하지 못했습니다 — 저장 공간이 가득 찼습니다",
   "Try again": "다시 시도", "Not saved to the cloud": "클라우드에 저장하지 못했습니다",
   "trying again in {n}s": "{n}초 뒤 자동으로 다시 시도",
   "The server did not answer in time — check the connection": "서버 응답이 없습니다 — 인터넷 연결을 확인해 주세요",

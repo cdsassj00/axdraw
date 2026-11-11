@@ -59,6 +59,7 @@ export type CloudStatus = "off" | "saving" | "saved" | "error";
 /** What the sync engine needs from the editor. */
 export interface CloudHost {
   currentBoardId(): string;
+  currentBoardName(): string;
   currentScene(): { elements: readonly AxElement[]; files: BinaryFiles };
   /** Merge a cloud copy into the open canvas without touching undo history. */
   mergeIntoCurrent(elements: readonly unknown[], files: BinaryFiles): void;
@@ -434,7 +435,19 @@ export class CloudSync {
   private async push(boardId: string, force = false): Promise<void> {
     const account = this.account;
     if (!account) return;
-    const board = getBoard(boardId);
+    let board = getBoard(boardId);
+    // The open canvas missing from the stored list: the list could not be
+    // written (a full browser store). Skipping it here is how a canvas once
+    // went unsaved everywhere with the chip still saying "saved". Put it
+    // back, and if even that fails, say so.
+    if (!board && boardId === this.host.currentBoardId()) {
+      addBoard({ id: boardId, name: this.host.currentBoardName(), updated: Date.now() });
+      board = getBoard(boardId);
+      if (!board) {
+        this.fail(boardId, "This browser could not save the canvas — storage is full");
+        return;
+      }
+    }
     // A placeholder has nothing local yet; saving it would blank the cloud
     // copy. A board deleted meanwhile has nothing left to save either.
     if (!board || board.remote) {
