@@ -245,6 +245,7 @@ async function resolveAiProvider(request, env, modelEnv, preferences) {
  */
 async function putRoomScene(env, id, body) {
   if (env.ROOM_SCENES) {
+    await keepHistory(env, `room/${id}`);
     await env.ROOM_SCENES.put(`room/${id}`, body);
     return;
   }
@@ -388,8 +389,42 @@ function canvasKey(workspace, id) {
   return `canvas/${workspace}/${id}`;
 }
 
+/**
+ * Keeps the copy about to be overwritten.
+ *
+ * Every save used to replace the stored copy outright, so a device that saved
+ * a canvas missing most of its shapes (a browser that had lost its local
+ * copy, say) destroyed the only good one, with nothing to go back to. Before
+ * each overwrite the current copy is now kept under history/…, at most one
+ * per ten minutes per canvas and the newest fifty, so any recent state can be
+ * restored. R2 only: KV deploys have no room for it.
+ */
+const HISTORY_EVERY_MS = 10 * 60 * 1000;
+const HISTORY_KEEP = 50;
+
+async function keepHistory(env, key) {
+  if (!env.ROOM_SCENES) return;
+  try {
+    const prefix = `history/${key}/`;
+    const listed = await env.ROOM_SCENES.list({ prefix, limit: 1000 });
+    const stamps = listed.objects.map((object) => object.key).sort();
+    const newest = stamps.length ? Number(stamps[stamps.length - 1].slice(prefix.length)) : 0;
+    if (Date.now() - newest < HISTORY_EVERY_MS) return;
+    const current = await env.ROOM_SCENES.get(key);
+    if (!current) return;
+    await env.ROOM_SCENES.put(`${prefix}${String(Date.now()).padStart(15, "0")}`, await current.arrayBuffer());
+    const excess = stamps.length + 1 - HISTORY_KEEP;
+    if (excess > 0) await env.ROOM_SCENES.delete(stamps.slice(0, excess));
+  } catch {
+    // A missed backup must never stop the save itself.
+  }
+}
+
 async function putCanvasBody(env, workspace, id, body) {
-  if (env.ROOM_SCENES) return env.ROOM_SCENES.put(canvasKey(workspace, id), body);
+  if (env.ROOM_SCENES) {
+    await keepHistory(env, canvasKey(workspace, id));
+    return env.ROOM_SCENES.put(canvasKey(workspace, id), body);
+  }
   return env.SCENES.put(canvasKey(workspace, id), body);
 }
 
