@@ -24,6 +24,7 @@ import { toggleAiChat } from "./aiChat";
 import { LOCALE_NAMES, locale, setLocale, t, type Locale } from "../i18n";
 import { button, dismissable, h } from "./dom";
 import { iconEl } from "./icons";
+import { openRecoverDialog } from "./recover";
 import { createCommandPalette } from "./commandPalette";
 import { createRecognitionChip } from "./recognitionChip";
 import { forgetRoom, listRecentRooms, roomUrl } from "../scene/recentRooms";
@@ -952,6 +953,7 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
   menu.append(
     menuItem("plus", "New canvas", null, run(() => app.newBoard())),
     menuItem("duplicate", "Boards…", null, run(() => openBoardsDialog(app))),
+    menuItem("undo", "되살리기 (지운 도형 · 이전 버전)…", null, run(() => openRecoverDialog(app))),
     menuItem("trash", "Remove empty canvases and rooms", null, run(() => {
       void app.cleanupEmpty().then((removed) => app.reportCleanup(removed));
     })),

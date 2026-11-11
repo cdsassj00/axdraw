@@ -761,6 +761,7 @@ try {
   lPage.off("request", countPut);
   check("reopening unchanged canvases after a reload uploads nothing", puts.length === 0, puts.join(", "));
 
+
   // Another device: nothing but the email and password.
   const tablet = await profile("tablet");
   const tabPage = await tablet.open();
@@ -847,6 +848,27 @@ try {
   );
   const stillStored = (await listStored()).filter((row) => !row.id.startsWith("_")).length;
   check("and they stay in the account", stillStored === 2, `${stillStored} in the account`);
+
+  // Work overwritten in the cloud can be got back: the server keeps the copy
+  // each save replaced, and the browser opens one as a new canvas.
+  {
+    const before = await lPage.evaluate(() => window.axdraw.elements.filter((e) => !e.isDeleted).length);
+    await lPage.click('button[title="Menu"]');
+    await lPage.click("text=되살리기 (지운 도형 · 이전 버전)…");
+    await lPage.waitForSelector(".recover-version button", { timeout: 15000 });
+    const versions = await lPage.locator(".recover-version").count();
+    await lPage.click(".recover-version button");
+    await lPage.waitForFunction(() => /복원/.test(window.axdraw.currentBoardName()), null, { timeout: 15000 });
+    const restored = await lPage.evaluate(() => ({
+      name: window.axdraw.currentBoardName(),
+      shapes: window.axdraw.elements.filter((e) => !e.isDeleted).length,
+    }));
+    check(
+      "an earlier server copy of a canvas opens as a new canvas",
+      versions >= 1 && restored.shapes >= 1 && restored.shapes <= before + 1,
+      JSON.stringify({ versions, before, ...restored }),
+    );
+  }
 
   await lPage.click(".cloud-chip");
   await lPage.waitForFunction(() => !document.querySelector(".consent-marketing")?.disabled);

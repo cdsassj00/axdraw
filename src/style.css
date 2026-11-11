@@ -1718,3 +1718,10 @@ input[type="range"] {
     cursor: pointer;
   }
 }
+
+/* Recover dialog: erased shapes and earlier server copies. */
+.recover-modal { max-width: min(520px, calc(100vw - 32px)); }
+.recover-body h3 { margin: 14px 0 4px; font-size: 14px; }
+.recover-help, .recover-status { margin: 0 0 8px; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.recover-versions { max-height: 40vh; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.recover-version { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }

@@ -292,6 +292,25 @@ export async function listCloudCanvases(account: CloudAccount): Promise<CloudCan
   );
 }
 
+/** Earlier server copies of a canvas, newest first. */
+export async function listCanvasVersions(account: CloudAccount, id: string): Promise<{ stamp: string; size: number }[]> {
+  const response = await cloudFetch(`${API_BASE}/api/cloud/canvases/${id}/history`, { headers: await authHeaders(account) });
+  if (!response.ok) throw await failure(response, "Could not list earlier versions");
+  return ((await response.json()) as { versions?: { stamp: string; size: number }[] }).versions ?? [];
+}
+
+/** One earlier copy, decrypted here — the server cannot read it. */
+export async function pullCanvasVersion(account: CloudAccount, id: string, stamp: string): Promise<CloudScene> {
+  const response = await cloudFetch(
+    `${API_BASE}/api/cloud/canvases/${id}/history/${stamp}`,
+    { headers: await authHeaders(account) },
+    180000,
+  );
+  if (!response.ok) throw await failure(response, "Could not load that version");
+  const scene = await decryptJson<CloudScene>(await keyFor(account.secret), await response.arrayBuffer());
+  return { ...scene, elements: Array.isArray(scene.elements) ? scene.elements : [], files: scene.files ?? {} };
+}
+
 export async function pullCloudCanvas(
   account: CloudAccount,
   id: string,

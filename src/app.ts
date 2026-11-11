@@ -2776,6 +2776,36 @@ export class App implements CloudHost {
     this.notify();
   }
 
+  /**
+   * Brings back every shape erased on this canvas in the last 30 days.
+   *
+   * Erased shapes are kept whole, as tombstones, so that a deletion travels to
+   * other devices. That also makes them the last copy of work that went
+   * missing through a merge. Undo takes it back. Returns how many came back.
+   */
+  restoreDeleted(): number {
+    const erased = this.elements.filter((element) => element.isDeleted);
+    if (!erased.length) return 0;
+    for (const element of erased) mutateElement(element, { isDeleted: false });
+    this.elements = [...this.elements];
+    this.state.selectedIds = new Set(erased.map((element) => element.id));
+    this.commit();
+    return erased.length;
+  }
+
+  /** Opens a recovered copy as a canvas of its own, never over the current one. */
+  openRecoveredCopy(name: string, elements: readonly unknown[], files: BinaryFiles): void {
+    saveScene(this.elements, this.files, this.state);
+    const board = createBoard();
+    this.openBoard(board.id);
+    this.renameBoard(board.id, name);
+    this.elements = elements.map((element) => normalizeImportedElement(element as Record<string, unknown>));
+    this.files = { ...files };
+    this.state.selectedIds = new Set();
+    this.commit();
+    this.zoomToFit();
+  }
+
   deleteSelection(): void {
     if (!this.state.selectedIds.size) return;
     this.applySlice(deleteSelected(this.slice()));
