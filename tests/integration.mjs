@@ -870,6 +870,35 @@ try {
     );
   }
 
+  // A canvas well past the old 20 MB limit still saves: it streams to R2.
+  if (!LIVE) {
+    await lPage.evaluate(() => {
+      const app = window.axdraw;
+      app.newBoard();
+      const big = "data:image/png;base64," + "QUJD".repeat(7_500_000); // ~30 MB
+      app.files = { bigpic: { id: "bigpic", mimeType: "image/png", dataURL: big, created: Date.now() } };
+      app.elements = [{ id: "bigimg", type: "image", fileId: "bigpic", status: "saved", scale: [1, 1], x: 0, y: 0,
+        width: 200, height: 200, angle: 0, strokeColor: "transparent", backgroundColor: "transparent", fillStyle: "solid",
+        strokeWidth: 1, strokeStyle: "solid", roughness: 0, opacity: 100, groupIds: [], frameId: null, roundness: null,
+        seed: 1, version: 1, versionNonce: 1, isDeleted: false, boundElements: null, updated: Date.now(), link: null, locked: false }];
+      app.commit();
+      app.saveNow();
+    });
+    await lPage.waitForFunction(
+      () => window.axdraw.cloud.status === "saved" && !window.axdraw.cloud.pushing.size,
+      null,
+      { timeout: 120000 },
+    ).catch(() => undefined);
+    const bigId = await lPage.evaluate(() => window.axdraw.currentBoardId());
+    const row = sql(`SELECT size FROM canvases WHERE id = '${bigId}'`);
+    const chip = await lPage.evaluate(() => ({ status: window.axdraw.cloud.status, error: window.axdraw.cloud.lastError }));
+    check(
+      "a 30 MB canvas saves to the cloud (the limit is now 90 MB)",
+      row.length === 1 && row[0].size > 25 * 1024 * 1024 && chip.status === "saved",
+      JSON.stringify({ row, chip }),
+    );
+  }
+
   await lPage.click(".cloud-chip");
   await lPage.waitForFunction(() => !document.querySelector(".consent-marketing")?.disabled);
   await lPage.uncheck(".consent-marketing");
