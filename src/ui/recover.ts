@@ -46,7 +46,7 @@ export function openRecoverDialog(app: App): void {
     h("h3", { text: "2. 서버에 남은 이전 버전" }),
     h("p", {
       class: "recover-help",
-      text: "저장할 때마다 덮어쓰기 전 내용을 10분마다 보관합니다. 고른 버전은 새 캔버스로 열리고, 지금 캔버스는 그대로 둡니다.",
+      text: "덮어쓰기 전 내용을 5분마다 보관합니다(하루치는 전부, 30일은 1시간마다, 1년은 하루마다). 고른 버전은 새 캔버스로 열리고, 지금 캔버스는 그대로 둡니다.",
     }),
     versionList,
     status,
