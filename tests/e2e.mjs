@@ -2241,6 +2241,37 @@ try {
     await context.close();
   }
 
+  /* ---------------- erased shapes can be brought back ---------------- */
+  {
+    const restored = await page.evaluate(() => {
+      const app = window.axdraw;
+      const kept = app.elements;
+      const base = { angle: 0, strokeColor: "#1e1e1e", backgroundColor: "transparent", fillStyle: "solid",
+        strokeWidth: 2, strokeStyle: "solid", roughness: 1, opacity: 100, groupIds: [], frameId: null,
+        roundness: null, seed: 1, version: 3, versionNonce: 1, boundElements: null, updated: Date.now(),
+        link: null, locked: false };
+      app.elements = [
+        { ...base, id: "alive", type: "rectangle", x: 0, y: 0, width: 50, height: 50, isDeleted: false },
+        { ...base, id: "gone-1", type: "rectangle", x: 80, y: 0, width: 50, height: 50, isDeleted: true },
+        { ...base, id: "gone-2", type: "ellipse", x: 160, y: 0, width: 50, height: 50, isDeleted: true },
+      ];
+      app.commit();
+      const count = app.restoreDeleted();
+      const live = app.elements.filter((e) => !e.isDeleted).length;
+      const versions = app.elements.filter((e) => e.id.startsWith("gone")).map((e) => e.version);
+      app.undo();
+      const afterUndo = app.elements.filter((e) => !e.isDeleted).length;
+      app.elements = kept;
+      app.commit();
+      return { count, live, versions, afterUndo };
+    });
+    check(
+      "erased shapes come back with a newer version, and undo takes them away again",
+      restored.count === 2 && restored.live === 3 && restored.versions.every((v) => v > 3) && restored.afterUndo === 1,
+      JSON.stringify(restored),
+    );
+  }
+
   check("no console or page errors", errors.length === 0, errors.join(" | "));
 
   console.log(`\n${passed} passed, ${failed} failed`);

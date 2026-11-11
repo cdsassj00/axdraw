@@ -16,6 +16,7 @@
  *   GET    /api/cloud/canvases/:id  (Bearer)             → iv‖ciphertext
  *   PUT    /api/cloud/canvases/:id  (Bearer, x-base-version) → { updated } | 409
  *   DELETE /api/cloud/canvases/:id  (Bearer)
+ *   GET    /api/cloud/canvases/:id/history[/:stamp] (Bearer) → earlier copies
  *   GET|DELETE /api/cloud/account, POST /api/cloud/consent  (Bearer)
  *
  * CORS is open on purpose: ids are unguessable (60 bits) and the content is
@@ -633,6 +634,26 @@ async function handleCloud(request, env, url) {
       .all();
     await env.DB.prepare("UPDATE workspaces SET last_seen = ? WHERE id = ?").bind(now, account.id).run();
     return json({ canvases: results ?? [] });
+  }
+
+  // Earlier copies kept by keepHistory(): the list, then any one of them.
+  // Same ciphertext as the canvas itself; only the browser can open it.
+  const history = /^\/api\/cloud\/canvases\/([A-Za-z0-9_-]{1,40})\/history(?:\/(\d{1,15}))?$/.exec(url.pathname);
+  if (history && request.method === "GET") {
+    if (!env.ROOM_SCENES) return json({ versions: [] });
+    const prefix = `history/${canvasKey(account.id, history[1])}/`;
+    if (!history[2]) {
+      const listed = await env.ROOM_SCENES.list({ prefix, limit: 1000 });
+      const versions = listed.objects
+        .map((object) => ({ stamp: object.key.slice(prefix.length), size: object.size }))
+        .sort((a, b) => (a.stamp < b.stamp ? 1 : -1));
+      return json({ versions });
+    }
+    const object = await env.ROOM_SCENES.get(`${prefix}${history[2].padStart(15, "0")}`);
+    if (!object) return json({ error: "not found" }, 404);
+    return new Response(await object.arrayBuffer(), {
+      headers: { "content-type": "application/octet-stream", "cache-control": "no-store", ...CORS_HEADERS },
+    });
   }
 
   const canvas = /^\/api\/cloud\/canvases\/([A-Za-z0-9_-]{1,40})$/.exec(url.pathname);
