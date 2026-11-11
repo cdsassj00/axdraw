@@ -394,28 +394,57 @@ function canvasKey(workspace, id) {
  * Keeps the copy about to be overwritten.
  *
  * Every save used to replace the stored copy outright, so a device that saved
- * a canvas missing most of its shapes (a browser that had lost its local
- * copy, say) destroyed the only good one, with nothing to go back to. Before
- * each overwrite the current copy is now kept under history/…, at most one
- * per ten minutes per canvas and the newest fifty, so any recent state can be
- * restored. R2 only: KV deploys have no room for it.
+ * a canvas missing most of its shapes destroyed the only good one, with
+ * nothing to go back to. Before each overwrite the current copy is now kept
+ * under history/…, at most one per five minutes per canvas. Nothing recent is
+ * ever thrown away: every copy from the last 24 hours stays, then one per hour
+ * for 30 days, then one per day for a year. R2 only: KV deploys have no room.
  */
-const HISTORY_EVERY_MS = 10 * 60 * 1000;
-const HISTORY_KEEP = 50;
+const HISTORY_EVERY_MS = 5 * 60 * 1000;
+const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+
+/** Which history copies to drop: thin out by age, never inside a day. */
+function historyToDrop(stamps, now) {
+  const kept = new Set();
+  const drop = [];
+  for (const key of [...stamps].sort().reverse()) {
+    const age = now - Number(key.slice(key.lastIndexOf("/") + 1));
+    let bucket;
+    if (age < DAY) bucket = key;
+    else if (age < 30 * DAY) bucket = `h${Math.floor((now - age) / HOUR)}`;
+    else if (age < 365 * DAY) bucket = `d${Math.floor((now - age) / DAY)}`;
+    else bucket = null;
+    if (bucket && !kept.has(bucket)) kept.add(bucket);
+    else drop.push(key);
+  }
+  return drop;
+}
+
+async function listAll(bucket, prefix) {
+  const keys = [];
+  let cursor;
+  do {
+    const page = await bucket.list({ prefix, cursor, limit: 1000 });
+    for (const object of page.objects) keys.push(object.key);
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return keys;
+}
 
 async function keepHistory(env, key) {
   if (!env.ROOM_SCENES) return;
   try {
     const prefix = `history/${key}/`;
-    const listed = await env.ROOM_SCENES.list({ prefix, limit: 1000 });
-    const stamps = listed.objects.map((object) => object.key).sort();
+    const stamps = (await listAll(env.ROOM_SCENES, prefix)).sort();
     const newest = stamps.length ? Number(stamps[stamps.length - 1].slice(prefix.length)) : 0;
     if (Date.now() - newest < HISTORY_EVERY_MS) return;
     const current = await env.ROOM_SCENES.get(key);
     if (!current) return;
-    await env.ROOM_SCENES.put(`${prefix}${String(Date.now()).padStart(15, "0")}`, await current.arrayBuffer());
-    const excess = stamps.length + 1 - HISTORY_KEEP;
-    if (excess > 0) await env.ROOM_SCENES.delete(stamps.slice(0, excess));
+    const added = `${prefix}${String(Date.now()).padStart(15, "0")}`;
+    await env.ROOM_SCENES.put(added, await current.arrayBuffer());
+    const drop = historyToDrop([...stamps, added], Date.now());
+    for (let i = 0; i < drop.length; i += 1000) await env.ROOM_SCENES.delete(drop.slice(i, i + 1000));
   } catch {
     // A missed backup must never stop the save itself.
   }
@@ -643,9 +672,14 @@ async function handleCloud(request, env, url) {
     if (!env.ROOM_SCENES) return json({ versions: [] });
     const prefix = `history/${canvasKey(account.id, history[1])}/`;
     if (!history[2]) {
-      const listed = await env.ROOM_SCENES.list({ prefix, limit: 1000 });
-      const versions = listed.objects
-        .map((object) => ({ stamp: object.key.slice(prefix.length), size: object.size }))
+      const versions = [];
+      let cursor;
+      do {
+        const page = await env.ROOM_SCENES.list({ prefix, cursor, limit: 1000 });
+        for (const object of page.objects) versions.push({ stamp: object.key.slice(prefix.length), size: object.size });
+        cursor = page.truncated ? page.cursor : undefined;
+      } while (cursor);
+      versions
         .sort((a, b) => (a.stamp < b.stamp ? 1 : -1));
       return json({ versions });
     }
