@@ -33,7 +33,10 @@ export const ROOM_HASH_PATTERN = /^#room=([A-Za-z0-9]+),([A-Za-z0-9_-]+)$/;
 
 const CURSOR_COLORS = ["#0071e3", "#e03131", "#2f9e44", "#f08c00", "#be4bdb", "#0c8599"];
 const CURSOR_TIMEOUT_MS = 6000;
-const SCENE_THROTTLE_MS = 150;
+// Changes go out while they happen — a stroke or a drag is seen as it is
+// drawn, not when the button comes up — and only what changed is sent, so
+// a short interval stays cheap however large the canvas is.
+const SCENE_THROTTLE_MS = 60;
 const CURSOR_THROTTLE_MS = 50;
 // Only the person drawing saves, and only this often. A full-scene save
 // carries everyone's merged work, so one artist's saves cover the room; a
@@ -45,7 +48,14 @@ const SAVE_THROTTLE_MS = 5000;
 const RESTORE_RETRY_MS = [1500, 3000, 5000];
 
 type Message =
-  | { t: "scene"; from: string; elements: AxElement[]; files: BinaryFiles }
+  | {
+      t: "scene";
+      from: string;
+      elements: AxElement[];
+      files: BinaryFiles;
+      /** The whole canvas (for a newcomer) rather than just what changed. */
+      full?: boolean;
+    }
   | { t: "cursor"; from: string; x: number; y: number }
   | { t: "hello"; from: string }
   | { t: "view"; from: string; x1: number; y1: number; x2: number; y2: number }
@@ -91,6 +101,13 @@ export class CollabSession {
   private sawPeerScene = false;
   private lastCursorSent = 0;
   private sentFileIds = new Set<string>();
+  /**
+   * The version of each element the room has already seen, from this tab or
+   * from a peer. Only elements whose version differs go out, so editing one
+   * shape on a canvas of hundreds sends one shape, not the whole canvas.
+   */
+  private knownVersions = new Map<string, number>();
+  private fullPending = false;
   private raf = 0;
   private detachPointer: (() => void) | null = null;
 
@@ -404,6 +421,9 @@ export class CollabSession {
         this.ws = ws;
         this.everConnected = true;
         void this.send({ t: "hello", from: this.selfId });
+        // Joining or coming back after a drop, offer everything: changes made
+        // while the socket was down reached no one.
+        this.fullPending = true;
         // A fresh peer should also offer what it has — with two blank
         // canvases this is a no-op; with content it seeds the room.
         this.queueBroadcast();
@@ -438,6 +458,8 @@ export class CollabSession {
       this.broadcastPending = true;
       return;
     }
+    // Nothing is marked as seen unless it can actually go out now.
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     // Send files only once per session — they are immutable blobs, and
     // re-sending pasted images on every stroke would swamp the socket.
     const files: BinaryFiles = {};
@@ -447,7 +469,13 @@ export class CollabSession {
         this.sentFileIds.add(id);
       }
     }
-    await this.send({ t: "scene", from: this.selfId, elements: this.app.elements as AxElement[], files });
+    const full = this.fullPending;
+    this.fullPending = false;
+    const all = this.app.elements as AxElement[];
+    const elements = full ? all : all.filter((element) => this.knownVersions.get(element.id) !== element.version);
+    if (!elements.length && !Object.keys(files).length) return;
+    for (const element of elements) this.knownVersions.set(element.id, element.version);
+    await this.send({ t: "scene", from: this.selfId, elements, files, ...(full ? { full: true } : {}) });
     this.queueSave();
   }
 
@@ -493,8 +521,14 @@ export class CollabSession {
         // client's elements, so whoever is drawing writes it out with their
         // own next save. Saving on every peer frame would multiply writes by
         // the number of people in the room.
-        this.sawPeerScene = true;
+        // Only a whole canvas proves this peer holds the room's state; a
+        // change on its own says nothing about the rest.
+        if (message.full) this.sawPeerScene = true;
         this.app.applyRemoteScene(message.elements, message.files);
+        // What a peer sent, the room has seen: never echo it back.
+        for (const element of message.elements) {
+          if (element && typeof element.id === "string") this.knownVersions.set(element.id, element.version);
+        }
         // A peer only broadcasts once it has merged the room's save, so its
         // scene is at least as current as storage.
         this.markRestored();
@@ -511,6 +545,7 @@ export class CollabSession {
       case "hello":
         this.app.onMessage?.(t("A collaborator joined"));
         this.sentFileIds.clear(); // Newcomers need the images too.
+        this.fullPending = true; // ...and the whole canvas, not just changes.
         void this.broadcastScene();
         break;
       case "bye":

@@ -501,6 +501,71 @@ try {
   );
   await reader.context().close();
 
+  // Live sync: a stroke shows up for the class while it is being drawn, and
+  // changing one shape on a big canvas sends that shape, not the canvas.
+  {
+    const lecturer = await (await profile("sync-teacher")).open();
+    await lecturer.evaluate(() => {
+      document.querySelector(".welcome")?.remove();
+      const app = window.axdraw;
+      const shapes = [];
+      for (let i = 0; i < 400; i++) {
+        shapes.push({ id: `bulk-${i}`, type: "rectangle", x: (i % 20) * 60, y: 900 + Math.floor(i / 20) * 60, width: 50, height: 40,
+          angle: 0, strokeColor: "#1e1e1e", backgroundColor: "transparent", fillStyle: "solid", strokeWidth: 2, strokeStyle: "solid",
+          roughness: 1, opacity: 100, groupIds: [], frameId: null, roundness: null, seed: i + 1, version: 1, versionNonce: 1,
+          isDeleted: false, boundElements: null, updated: Date.now(), link: null, locked: false });
+      }
+      app.elements = shapes;
+      app.commit();
+    });
+    await lecturer.evaluate(() => window.axdraw.startCollab());
+    await lecturer.waitForFunction(() => Boolean(window.axdraw.collab?.restored), null, { timeout: 15000 });
+    const syncUrl = await lecturer.evaluate(() => window.axdraw.collab.url);
+    const learner = await (await profile("sync-student")).open(syncUrl);
+    await learner.waitForFunction(() => window.axdraw.elements.filter((e) => !e.isDeleted).length >= 400, null, { timeout: 20000 });
+    await lecturer.waitForTimeout(800);
+
+    // Count what the lecturer's socket sends from here on.
+    await lecturer.evaluate(() => {
+      window.__sent = [];
+      const ws = window.axdraw.collab.ws;
+      const send = ws.send.bind(ws);
+      ws.send = (data) => { window.__sent.push(data.byteLength ?? data.length ?? 0); return send(data); };
+    });
+    await lecturer.keyboard.press("p");
+    await lecturer.mouse.move(300, 300);
+    await lecturer.mouse.down();
+    for (let i = 0; i < 25; i++) await lecturer.mouse.move(300 + i * 12, 300 + Math.sin(i / 3) * 40, { steps: 2 });
+    // Still drawing: the button is down.
+    const seenMidStroke = await learner
+      .waitForFunction(() => window.axdraw.elements.some((e) => e.type === "freedraw" && !e.isDeleted && e.points.length > 5), null, { timeout: 5000 })
+      .then(() => true, () => false);
+    await lecturer.mouse.up();
+    check("students see a stroke while the teacher is still drawing it", seenMidStroke);
+
+    await lecturer.keyboard.press("Escape");
+    await lecturer.keyboard.press("v");
+    await lecturer.waitForTimeout(500);
+    await lecturer.evaluate(() => { window.__sent = []; });
+    await lecturer.evaluate(() => {
+      const app = window.axdraw;
+      const shape = app.elements.find((e) => e.id === "bulk-0");
+      shape.x += 30;
+      shape.version += 1;
+      app.commit();
+    });
+    await learner.waitForFunction(() => window.axdraw.elements.find((e) => e.id === "bulk-0")?.x === 30, null, { timeout: 5000 }).catch(() => undefined);
+    const bytes = await lecturer.evaluate(() => window.__sent.reduce((n, b) => n + b, 0));
+    const moved = await learner.evaluate(() => window.axdraw.elements.find((e) => e.id === "bulk-0")?.x);
+    check(
+      "moving one shape on a 400-shape canvas sends only that shape",
+      moved === 30 && bytes > 0 && bytes < 4000,
+      `${bytes} bytes sent, student sees x=${moved}`,
+    );
+    await lecturer.context().close();
+    await learner.context().close();
+  }
+
   // The sweep of empty canvases and dead room links.
   const tidy = await profile("tidy");
   const tPage2 = await tidy.open();
