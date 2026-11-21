@@ -20,6 +20,8 @@ export interface ClassBoard {
   sections: string[];
   locked: boolean;
   createdAt: number;
+  /** Whether an instructor password has been set. */
+  hasPassword?: boolean;
 }
 
 export interface BoardFile {
@@ -174,8 +176,37 @@ export function fileUrl(slug: string, file: BoardFile, download = false): string
   return `${API_BASE}/api/boards/${slug}/files/${file.id}${download ? "?download=1" : ""}`;
 }
 
+/** Boards being looked at as a student, instructor mode switched off. */
+const studentView = new Set<string>();
+
+/** Instructor mode off (preview what students see) or back on, for this tab. */
+export function setStudentView(slug: string, on: boolean): void {
+  if (on) studentView.add(slug);
+  else studentView.delete(slug);
+}
+
+export function isStudentView(slug: string): boolean {
+  return studentView.has(slug);
+}
+
+/** Remembers the instructor password of a board (it syncs with the account). */
+export function rememberBoardPassword(board: Pick<ClassBoard, "slug" | "title">, password: string): void {
+  rememberBoard(board, password);
+}
+
+/** Forgets a password that turned out to be wrong. */
+export function forgetBoardPassword(slug: string): void {
+  const boards = read<KnownBoard[]>(KNOWN_KEY, []);
+  const entry = boards.find((item) => item.slug === slug);
+  if (!entry?.ownerKey) return;
+  delete entry.ownerKey;
+  write(KNOWN_KEY, boards);
+}
+
 async function call<T>(path: string, init: RequestInit = {}, slug?: string, timeoutMs = 30000): Promise<T> {
-  const ownerKey = slug ? ownerKeyOf(slug) : undefined;
+  const stored = slug && !studentView.has(slug) ? ownerKeyOf(slug) : undefined;
+  // Encoded: a password may hold characters a header cannot carry as is.
+  const ownerKey = stored ? encodeURIComponent(stored) : undefined;
   const response = await cloudFetch(
     `${API_BASE}${path}`,
     {
@@ -193,24 +224,45 @@ async function call<T>(path: string, init: RequestInit = {}, slug?: string, time
   return body as T;
 }
 
-export async function createClassBoard(title: string): Promise<ClassBoard> {
-  const { board, ownerKey } = await call<{ board: ClassBoard; ownerKey: string }>("/api/boards", {
+/**
+ * Makes a board. Whoever makes it is not its instructor by that alone: the
+ * instructor is whoever knows the password, set here or later.
+ */
+export async function createClassBoard(title: string, password = ""): Promise<ClassBoard> {
+  const { board } = await call<{ board: ClassBoard }>("/api/boards", {
     method: "POST",
-    body: JSON.stringify({ title }),
+    body: JSON.stringify({ title, ...(password ? { password } : {}) }),
   });
-  rememberBoard(board, ownerKey);
+  rememberBoard(board, password || undefined);
   return board;
 }
 
-export async function fetchClassBoard(slug: string): Promise<{ board: ClassBoard; posts: BoardPost[]; isOwner: boolean }> {
-  const result = await call<{ board: ClassBoard; posts: BoardPost[]; isOwner: boolean }>(`/api/boards/${slug}`, {}, slug);
+/** Sets (or, for the instructor, changes) a board's instructor password. */
+export async function setBoardPassword(board: Pick<ClassBoard, "slug" | "title">, password: string): Promise<void> {
+  await call(`/api/boards/${board.slug}/admin`, { method: "POST", body: JSON.stringify({ password }) }, board.slug);
+  rememberBoard(board, password);
+}
+
+export async function fetchClassBoard(
+  slug: string,
+): Promise<{ board: ClassBoard; posts: BoardPost[]; isOwner: boolean; canClaim: boolean }> {
+  const result = await call<{ board: ClassBoard; posts: BoardPost[]; isOwner: boolean; canClaim: boolean }>(`/api/boards/${slug}`, {}, slug);
   rememberBoard(result.board);
+  // A stored password that no longer opens the board is dropped, so it is not
+  // sent (and counted as a wrong guess) on every refresh.
+  if (!result.isOwner && result.board.hasPassword && !studentView.has(slug) && ownerKeyOf(slug)) forgetBoardPassword(slug);
   return result;
 }
 
 export async function updateClassBoard(
   slug: string,
-  patch: Partial<Pick<ClassBoard, "title" | "sections" | "locked">>,
+  patch: Partial<Pick<ClassBoard, "title" | "sections" | "locked">> & {
+    /** Rename a category; its posts follow. */
+    rename?: { from: string; to: string };
+    /** Remove a category; its posts move to `moveTo` (or the first left). */
+    remove?: string;
+    moveTo?: string;
+  },
 ): Promise<ClassBoard> {
   const { board } = await call<{ board: ClassBoard }>(`/api/boards/${slug}`, { method: "PATCH", body: JSON.stringify(patch) }, slug);
   rememberBoard(board);
