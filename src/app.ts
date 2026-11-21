@@ -555,6 +555,9 @@ export class App implements CloudHost {
         ? this.soleSimpleLinear(selected) ?? undefined
         : undefined;
 
+    // No box around a straight line or arrow: just the line and its ends.
+    if (this.soleSimpleLinear(selected)) selectionBounds = null;
+
     renderInteractiveScene(this.interactiveCanvas, {
       elements: this.elements,
       selectedIds: this.state.selectedIds,
