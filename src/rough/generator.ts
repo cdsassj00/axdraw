@@ -406,9 +406,12 @@ function computeEllipsePoints(
   const allPoints: Point[] = [];
   const radOffset = offsetOpt(0.5, o) - Math.PI / 2;
 
+  // The lead-in and the overshoot both stay on the outline. They used to dip
+  // to 90-98% of the radius, which bent each stroke inwards where it starts
+  // and ends: on a large circle those bends read as stray ticks at the top.
   allPoints.push([
-    offsetOpt(offsetAmount, o) + cx + 0.9 * rx * Math.cos(radOffset - increment),
-    offsetOpt(offsetAmount, o) + cy + 0.9 * ry * Math.sin(radOffset - increment),
+    offsetOpt(offsetAmount, o) + cx + rx * Math.cos(radOffset - increment),
+    offsetOpt(offsetAmount, o) + cy + ry * Math.sin(radOffset - increment),
   ]);
   for (let angle = radOffset; angle < Math.PI * 2 + radOffset - 0.01; angle += increment) {
     const p: Point = [
@@ -418,18 +421,20 @@ function computeEllipsePoints(
     corePoints.push(p);
     allPoints.push(p);
   }
-  allPoints.push([
-    offsetOpt(offsetAmount, o) + cx + rx * Math.cos(radOffset + Math.PI * 2 + overlap * 0.5),
-    offsetOpt(offsetAmount, o) + cy + ry * Math.sin(radOffset + Math.PI * 2 + overlap * 0.5),
-  ]);
-  allPoints.push([
-    offsetOpt(offsetAmount, o) + cx + 0.98 * rx * Math.cos(radOffset + overlap),
-    offsetOpt(offsetAmount, o) + cy + 0.98 * ry * Math.sin(radOffset + overlap),
-  ]);
-  allPoints.push([
-    offsetOpt(offsetAmount, o) + cx + 0.9 * rx * Math.cos(radOffset + overlap * 0.5),
-    offsetOpt(offsetAmount, o) + cy + 0.9 * ry * Math.sin(radOffset + overlap * 0.5),
-  ]);
+  // Close the loop, overshoot a little along the outline, and end there: the
+  // last entry is a control point only, placed further along the same arc so
+  // the stroke leaves in the direction it was already going.
+  // The overshoot is kept forward and modest whatever the roughness: a
+  // negative or oversized one turned the points back on themselves and drew
+  // a chord across the circle.
+  const close = radOffset + Math.PI * 2;
+  const past = Math.min(Math.max(overlap, increment * 0.15), increment * 0.6);
+  for (const angle of [close + past, close + past + increment]) {
+    allPoints.push([
+      offsetOpt(offsetAmount, o) * 0.5 + cx + rx * Math.cos(angle),
+      offsetOpt(offsetAmount, o) * 0.5 + cy + ry * Math.sin(angle),
+    ]);
+  }
   return { corePoints, allPoints };
 }
 
