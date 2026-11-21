@@ -83,6 +83,8 @@ export function renderInteractiveScene(canvas: HTMLCanvasElement, state: Interac
   if (state.selectedIds.size > 0) {
     for (const element of state.elements) {
       if (!state.selectedIds.has(element.id) || element.isDeleted) continue;
+      // A line shown with its draggable points needs no other outline.
+      if (state.editingLinear && element.id === state.editingLinear.id) continue;
       drawElementOutline(ctx, element, px, ACCENT_SOFT, 1);
     }
   }
@@ -233,6 +235,24 @@ function drawElementOutline(
   ctx.translate(cx, cy);
   ctx.rotate(element.angle);
   ctx.translate(-cx, -cy);
+  if (element.type === "line" || element.type === "arrow") {
+    // A line is outlined along itself, not by a box around it: a box around
+    // a diagonal arrow is mostly empty space and reads as a rectangle.
+    const points = (element as LinearElement).points;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(6, lineWidth * 6) * px;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.globalAlpha = 0.45;
+    ctx.beginPath();
+    points.forEach(([lx, ly], index) => {
+      if (index === 0) ctx.moveTo(element.x + lx, element.y + ly);
+      else ctx.lineTo(element.x + lx, element.y + ly);
+    });
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
   ctx.strokeStyle = color;
   ctx.lineWidth = lineWidth * px;
   ctx.setLineDash([4 * px, 4 * px]);
