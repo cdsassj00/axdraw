@@ -26,6 +26,7 @@ import { button, dismissable, h } from "./dom";
 import { iconEl } from "./icons";
 import { openRecoverDialog } from "./recover";
 import { openBoardForCanvas } from "./classBoard";
+import { openEnterCodeDialog } from "./joinCode";
 import { createCommandPalette } from "./commandPalette";
 import { createRecognitionChip } from "./recognitionChip";
 import { forgetRoom, listRecentRooms, roomUrl } from "../scene/recentRooms";
@@ -963,6 +964,7 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
     menuItem("duplicate", "Boards…", null, run(() => openBoardsDialog(app))),
     menuItem("undo", "되살리기 (지운 도형 · 이전 버전)…", null, run(() => openRecoverDialog(app))),
     menuItem("users", "Class board…", null, run(() => void openBoardForCanvas(app))),
+    menuItem("users", "Join with a code…", null, run(() => openEnterCodeDialog(app))),
     menuItem("trash", "Remove empty canvases and rooms", null, run(() => {
       void app.cleanupEmpty().then((removed) => app.reportCleanup(removed));
     })),

@@ -19,6 +19,7 @@
  *   GET    /api/cloud/canvases/:id/history[/:stamp] (Bearer) → earlier copies
  *   GET|DELETE /api/cloud/account, POST /api/cloud/consent  (Bearer)
  *   /api/boards…  class post-it boards — see worker/boards.js
+ *   /api/codes…, /j/:code  six-digit join codes — see worker/codes.js
  *
  * CORS is open on purpose: ids are unguessable (60 bits) and the content is
  * ciphertext, so the origin of the reader adds no protection worth having,
@@ -26,6 +27,7 @@
  */
 
 import { handleBoards } from "./boards.js";
+import { handleCodes } from "./codes.js";
 
 const MAX_BYTES = 20 * 1024 * 1024; // KV values cap at 25 MiB; leave headroom.
 // Cloud canvases stream straight to R2, never held in memory, so they can be
@@ -794,6 +796,12 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
+    // Short join links: axdraw.org/j/482913 opens the app on that code.
+    const shortJoin = /^\/j\/(\d{6})\/?$/.exec(url.pathname);
+    if (shortJoin) {
+      return new Response(null, { status: 302, headers: { location: `/#join=${shortJoin[1]}`, "cache-control": "no-store" } });
+    }
+
     if (url.pathname.startsWith("/api/")) {
       if (request.method === "OPTIONS") {
         return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -1006,6 +1014,14 @@ export default {
         const reply = completion.choices?.[0]?.message?.content?.trim();
         if (!reply) return json({ error: "AI returned no reply" }, 502);
         return json({ reply });
+      }
+
+      if (url.pathname === "/api/codes" || url.pathname.startsWith("/api/codes/")) {
+        try {
+          return await handleCodes(request, env, url, { json });
+        } catch (error) {
+          return json({ error: "join code request failed", detail: String(error).slice(0, 200) }, 500);
+        }
       }
 
       // Class boards: Padlet-style post-it walls paired with canvases.

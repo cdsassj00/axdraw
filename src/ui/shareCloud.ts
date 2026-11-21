@@ -10,6 +10,8 @@
 
 import type { App } from "../app";
 import { t } from "../i18n";
+import { createJoinCode } from "../scene/joinCode";
+import { openJoinCodeDialog } from "./joinCode";
 import { h } from "./dom";
 import { deleteCloudAccount, fetchAccount, setMarketingConsent } from "../scene/cloud";
 
@@ -32,6 +34,28 @@ function modal(width: string, children: (Node | null)[]): { close: () => void } 
 }
 
 /* ---------------------------------------------------------------- share */
+
+/**
+ * A six-digit code + QR for the live room — starting the room first if need
+ * be. The room's key is stored with the code on the server, so the dialog
+ * says plainly that a code-opened room is not end-to-end encrypted.
+ */
+async function showRoomCode(app: App): Promise<void> {
+  try {
+    if (!app.collab) await app.startCollab();
+    const session = app.collab;
+    if (!session) return;
+    const code = await createJoinCode({ kind: "room", room: { id: session.id, key: session.keyText } });
+    openJoinCodeDialog({
+      title: t("Join code for this canvas"),
+      code,
+      note: t("With a code the server keeps this room's key, so the room is no longer end-to-end encrypted. For a private meeting, share the long live link instead."),
+      onMessage: app.onMessage ?? undefined,
+    });
+  } catch (error) {
+    app.onError?.(error instanceof Error ? t(error.message) : String(error));
+  }
+}
 
 export function openShareDialog(app: App): void {
   const live = h("div", { class: "share-option is-recommended" });
@@ -58,6 +82,12 @@ export function openShareDialog(app: App): void {
                 onclick: () => void app.startCollab(),
               }),
               h("button", {
+                class: "primary-btn share-code",
+                type: "button",
+                text: t("🔑 Join code · QR"),
+                onclick: () => void showRoomCode(app),
+              }),
+              h("button", {
                 class: "secondary-btn share-gather",
                 type: "button",
                 text: t("Bring everyone to my view"),
@@ -82,6 +112,15 @@ export function openShareDialog(app: App): void {
               text: t("Create live link and copy"),
               onclick: async () => {
                 await app.startCollab();
+                renderLive();
+              },
+            }),
+            h("button", {
+              class: "primary-btn share-code",
+              type: "button",
+              text: t("🔑 Join code · QR"),
+              onclick: async () => {
+                await showRoomCode(app);
                 renderLive();
               },
             }),
