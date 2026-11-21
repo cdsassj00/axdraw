@@ -7,9 +7,11 @@
  * be read by a whole class through a plain link.
  *
  * Who may do what:
- * - Creating a board returns an owner key, kept only in the creator's
- *   browser. With it they can rename the board, change its categories,
- *   lock it, and remove any post.
+ * - The instructor is whoever knows the board's password (sent as
+ *   x-board-key), not whoever created it. With it they can rename the
+ *   board, change its categories, lock it, and remove any post. A board
+ *   without a password yet can have one set by anyone — so set it when
+ *   making the board.
  * - Posting returns an edit key for that post: its author can remove it.
  * - Anyone with the link can read, post (unless locked), like and comment.
  * The server keeps only SHA-256 hashes of the keys.
@@ -18,9 +20,11 @@
  * raster images and PDFs are shown inline, everything else downloads, and
  * every response carries nosniff and a sandboxing Content-Security-Policy.
  *
- *   POST   /api/boards                          { title }        → { board, ownerKey }
+ *   POST   /api/boards                          { title, password? } → { board }
+ *   POST   /api/boards/:slug/admin              { password }     sets the instructor password
  *   GET    /api/boards/:slug                                     → { board, posts, isOwner }
- *   PATCH  /api/boards/:slug          (owner)   { title?, sections?, locked? }
+ *   PATCH  /api/boards/:slug          (owner)   { title?, sections?, locked?,
+ *                                                 rename?: { from, to }, remove?, moveTo? }
  *   POST   /api/boards/:slug/posts              { author, section, title, content, color, link?, file? }
  *                                                                → { post, editKey }
  *   DELETE /api/boards/:slug/posts/:id (owner or author)
@@ -73,15 +77,57 @@ const SCHEMA = [
      created_at INTEGER NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS class_comments_board ON class_comments (board_slug, post_id)`,
+  `CREATE TABLE IF NOT EXISTS class_board_tries (
+     ip TEXT NOT NULL,
+     slug TEXT NOT NULL,
+     minute INTEGER NOT NULL,
+     count INTEGER NOT NULL,
+     PRIMARY KEY (ip, slug, minute)
+   )`,
 ];
+
+// Added after the first deploy; "duplicate column" means it is already there.
+const MIGRATIONS = [`ALTER TABLE class_boards ADD COLUMN admin_hash TEXT`];
 
 let schemaReady = null;
 function ensureSchema(db) {
-  schemaReady ??= db.batch(SCHEMA.map((sql) => db.prepare(sql))).catch((error) => {
-    schemaReady = null;
-    throw error;
-  });
+  schemaReady ??= db
+    .batch(SCHEMA.map((sql) => db.prepare(sql)))
+    .then(() =>
+      Promise.all(
+        MIGRATIONS.map((sql) =>
+          db
+            .prepare(sql)
+            .run()
+            .catch((error) => {
+              if (!/duplicate column/i.test(String(error))) throw error;
+            }),
+        ),
+      ),
+    )
+    .catch((error) => {
+      schemaReady = null;
+      throw error;
+    });
   return schemaReady;
+}
+
+const MIN_PASSWORD = 4;
+const WRONG_TRIES_PER_MINUTE = 10;
+
+function passwordHash(slug, password) {
+  return sha256Hex(`class-board:${slug}:${password}`);
+}
+
+/** The key a browser sent, URI-decoded so a password may hold any characters. */
+function sentKey(request) {
+  const raw = request.headers.get("x-board-key");
+  if (!raw) return "";
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }
 
 const SLUG_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -146,7 +192,15 @@ function boardView(row) {
   } catch {
     // Keep the defaults.
   }
-  return { slug: row.slug, title: row.title, sections, locked: Boolean(row.locked), createdAt: row.created_at };
+  return {
+    slug: row.slug,
+    title: row.title,
+    sections,
+    locked: Boolean(row.locked),
+    createdAt: row.created_at,
+    // Whether an instructor password has been set for this board.
+    hasPassword: Boolean(row.admin_hash),
+  };
 }
 
 function postView(row, comments = []) {
@@ -167,9 +221,37 @@ function postView(row, comments = []) {
   };
 }
 
-async function isOwner(request, board) {
-  const key = request.headers.get("x-board-key");
-  return Boolean(key) && sameHash(board.owner_hash, await sha256Hex(key));
+/**
+ * Whether this request comes from the board's instructor.
+ *
+ * The instructor is whoever knows the board's password — not whoever made
+ * the board. A board from before passwords keeps the key its creator's
+ * browser holds until a password is set. Wrong guesses are counted per IP
+ * and board; past the limit nobody from that address is let in for the
+ * minute, so a short password cannot be walked.
+ */
+async function isOwner(request, board, env) {
+  const key = sentKey(request);
+  if (!key) return false;
+  const ip = request.headers.get("cf-connecting-ip") || "local";
+  const minute = Math.floor(Date.now() / 60000);
+  const tries = await env.DB.prepare("SELECT count FROM class_board_tries WHERE ip = ? AND slug = ? AND minute = ?")
+    .bind(ip, board.slug, minute)
+    .first();
+  if ((tries?.count ?? 0) >= WRONG_TRIES_PER_MINUTE) return false;
+  const ok = board.admin_hash
+    ? sameHash(board.admin_hash, await passwordHash(board.slug, key))
+    : Boolean(board.owner_hash) && sameHash(board.owner_hash, await sha256Hex(key));
+  if (!ok) {
+    await env.DB.prepare(
+      `INSERT INTO class_board_tries (ip, slug, minute, count) VALUES (?, ?, ?, 1)
+       ON CONFLICT(ip, slug, minute) DO UPDATE SET count = count + 1`,
+    )
+      .bind(ip, board.slug, minute)
+      .run();
+    if (Math.random() < 0.05) await env.DB.prepare("DELETE FROM class_board_tries WHERE minute < ?").bind(minute - 10).run();
+  }
+  return ok;
 }
 
 function fileKey(slug, id) {
@@ -237,8 +319,10 @@ export async function handleBoards(request, env, url, deps) {
   if (url.pathname === "/api/boards" && method === "POST") {
     const body = await request.json().catch(() => ({}));
     const title = text(body.title, 120) || "강의 게시판";
-    const ownerKey = randomKey();
-    const ownerHash = await sha256Hex(ownerKey);
+    // Making a board does not make anyone its instructor. A password given
+    // here is set at once; otherwise the board waits for one to be chosen.
+    const password = typeof body.password === "string" ? body.password : "";
+    if (password && password.length < MIN_PASSWORD) return json({ error: "the password needs at least 4 characters" }, 400);
     let slug = randomSlug();
     for (let tries = 0; tries < 3; tries++) {
       const taken = await env.DB.prepare("SELECT 1 FROM class_boards WHERE slug = ?").bind(slug).first();
@@ -246,11 +330,13 @@ export async function handleBoards(request, env, url, deps) {
       slug = randomSlug();
     }
     await env.DB.prepare(
-      "INSERT INTO class_boards (slug, title, sections_json, locked, owner_hash, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?, ?)",
+      "INSERT INTO class_boards (slug, title, sections_json, locked, owner_hash, admin_hash, created_at, updated_at) VALUES (?, ?, ?, 0, '', ?, ?, ?)",
     )
-      .bind(slug, title, JSON.stringify(DEFAULT_SECTIONS), ownerHash, now, now)
+      .bind(slug, title, JSON.stringify(DEFAULT_SECTIONS), password ? await passwordHash(slug, password) : null, now, now)
       .run();
-    return json({ board: { slug, title, sections: DEFAULT_SECTIONS, locked: false, createdAt: now }, ownerKey });
+    return json({
+      board: { slug, title, sections: DEFAULT_SECTIONS, locked: false, createdAt: now, hasPassword: Boolean(password) },
+    });
   }
 
   const match = /^\/api\/boards\/([A-Z0-9]{4,16})(\/.*)?$/.exec(url.pathname);
@@ -276,27 +362,78 @@ export async function handleBoards(request, env, url, deps) {
     return json({
       board: boardView(board),
       posts: (posts.results ?? []).map((row) => postView(row, byPost.get(row.id) ?? [])),
-      isOwner: await isOwner(request, board),
+      isOwner: await isOwner(request, board, env),
+      // No instructor yet: anyone may set the password and take the role.
+      canClaim: !board.admin_hash && !board.owner_hash,
     });
   }
 
+  // Sets the instructor password. Open to anyone only while the board has
+  // none (and no creator key from before passwords); after that, only the
+  // current instructor can change it.
+  if (rest === "/admin" && method === "POST") {
+    const body = await request.json().catch(() => ({}));
+    const password = typeof body.password === "string" ? body.password : "";
+    if (password.length < MIN_PASSWORD || password.length > 100) return json({ error: "the password needs at least 4 characters" }, 400);
+    const unclaimed = !board.admin_hash && !board.owner_hash;
+    if (!unclaimed && !(await isOwner(request, board, env))) {
+      return json({ error: "this board already has an instructor password" }, 403);
+    }
+    await env.DB.prepare("UPDATE class_boards SET admin_hash = ?, owner_hash = '', updated_at = ? WHERE slug = ?")
+      .bind(await passwordHash(slug, password), now, slug)
+      .run();
+    return json({ ok: true });
+  }
+
   if (rest === "" && method === "PATCH") {
-    if (!(await isOwner(request, board))) return json({ error: "only the board's owner can change it" }, 403);
+    if (!(await isOwner(request, board, env))) return json({ error: "only the board's owner can change it" }, 403);
     const body = await request.json().catch(() => ({}));
     const title = body.title === undefined ? board.title : text(body.title, 120) || board.title;
     const sections = body.sections === undefined ? null : cleanSections(body.sections);
     if (body.sections !== undefined && !sections) return json({ error: "invalid categories" }, 400);
     const locked = body.locked === undefined ? board.locked : body.locked ? 1 : 0;
-    await env.DB.prepare("UPDATE class_boards SET title = ?, sections_json = ?, locked = ?, updated_at = ? WHERE slug = ?")
-      .bind(title, sections ? JSON.stringify(sections) : board.sections_json, locked, now, slug)
-      .run();
+    // Renaming or removing a category takes its posts along: a rename moves
+    // them to the new name, a removal to the category named in moveTo (or
+    // the first one left). Without this the posts kept the old name and the
+    // category came straight back.
+    const current = boardView(board).sections;
+    let finalSections = sections;
+    const moves = [];
+    if (body.rename && typeof body.rename === "object") {
+      const from = text(body.rename.from, 60);
+      const to = text(body.rename.to, 60);
+      if (!current.includes(from) || !to) return json({ error: "invalid categories" }, 400);
+      if (to !== from && current.includes(to)) return json({ error: "a category with that name already exists" }, 400);
+      finalSections = current.map((name) => (name === from ? to : name));
+      moves.push([from, to]);
+    } else if (typeof body.remove === "string") {
+      const gone = text(body.remove, 60);
+      const left = current.filter((name) => name !== gone);
+      if (!current.includes(gone)) return json({ error: "invalid categories" }, 400);
+      if (!left.length) return json({ error: "a board needs at least one category" }, 400);
+      const moveTo = left.includes(text(body.moveTo, 60)) ? text(body.moveTo, 60) : left[0];
+      finalSections = left;
+      moves.push([gone, moveTo]);
+    }
+    await env.DB.batch([
+      env.DB.prepare("UPDATE class_boards SET title = ?, sections_json = ?, locked = ?, updated_at = ? WHERE slug = ?").bind(
+        title,
+        finalSections ? JSON.stringify(finalSections) : board.sections_json,
+        locked,
+        now,
+        slug,
+      ),
+      ...moves.map(([from, to]) =>
+        env.DB.prepare("UPDATE class_posts SET section = ? WHERE board_slug = ? AND section = ?").bind(to, slug, from),
+      ),
+    ]);
     const updated = await env.DB.prepare("SELECT * FROM class_boards WHERE slug = ?").bind(slug).first();
     return json({ board: boardView(updated) });
   }
 
   if (rest === "/files" && method === "POST") {
     if (!env.ROOM_SCENES) return json({ error: "file storage is not configured" }, 503);
-    if (board.locked && !(await isOwner(request, board))) return json({ error: "this board is locked" }, 403);
+    if (board.locked && !(await isOwner(request, board, env))) return json({ error: "this board is locked" }, 403);
     const length = Number(request.headers.get("content-length") ?? 0);
     if (!length) return json({ error: "empty file" }, 400);
     if (length > MAX_FILE_BYTES) return json({ error: "file too large" }, 413);
@@ -336,7 +473,7 @@ export async function handleBoards(request, env, url, deps) {
   }
 
   if (rest === "/posts" && method === "POST") {
-    const owner = await isOwner(request, board);
+    const owner = await isOwner(request, board, env);
     if (board.locked && !owner) return json({ error: "this board is locked" }, 403);
     const body = await request.json().catch(() => ({}));
     const sections = boardView(board).sections;
@@ -380,7 +517,7 @@ export async function handleBoards(request, env, url, deps) {
     if (!postMatch[2] && method === "DELETE") {
       const editKey = request.headers.get("x-post-key");
       const author = Boolean(editKey) && sameHash(post.edit_hash, await sha256Hex(editKey));
-      if (!author && !(await isOwner(request, board))) return json({ error: "only its author or the board's owner can remove a post" }, 403);
+      if (!author && !(await isOwner(request, board, env))) return json({ error: "only its author or the board's owner can remove a post" }, 403);
       await env.DB.batch([
         env.DB.prepare("DELETE FROM class_comments WHERE post_id = ?").bind(id),
         env.DB.prepare("DELETE FROM class_posts WHERE id = ?").bind(id),

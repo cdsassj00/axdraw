@@ -20,6 +20,11 @@ import {
   createClassBoard,
   deleteBoardPost,
   fetchClassBoard,
+  forgetBoardPassword,
+  isStudentView,
+  rememberBoardPassword,
+  setBoardPassword,
+  setStudentView,
   fileUrl,
   hasLiked,
   knownBoards,
@@ -45,6 +50,8 @@ interface State {
   board: ClassBoard;
   posts: BoardPost[];
   isOwner: boolean;
+  /** No instructor password yet: anyone may set one and take the role. */
+  canClaim: boolean;
   view: "wall" | "shelf";
   filter: string | null;
   query: string;
@@ -93,8 +100,17 @@ export async function openBoardForCanvas(app: App): Promise<void> {
   currentApp = app;
   let slug = app.classBoardSlug();
   if (!slug) {
+    // Whoever makes the board is not its instructor by that alone: the
+    // instructor is whoever knows the password, so choose it now.
+    const password = await askPassword({
+      title: t("New class board"),
+      text: t("Choose an instructor password. Only someone who knows it can add or remove categories, lock the board, or remove posts — on any device. Students do not need it."),
+      action: t("Create the board"),
+      skip: t("Create without a password"),
+    });
+    if (password === null) return;
     try {
-      const board = await createClassBoard(app.currentBoardName());
+      const board = await createClassBoard(app.currentBoardName(), password);
       app.linkClassBoard(board.slug);
       slug = board.slug;
     } catch (error) {
@@ -137,6 +153,7 @@ async function showBoard(app: App, slug: string, pairCanvas = false): Promise<vo
     board: loaded.board,
     posts: loaded.posts,
     isOwner: loaded.isOwner,
+    canClaim: loaded.canClaim,
     view: state?.board.slug === slug ? state.view : "wall",
     filter: null,
     query: "",
@@ -163,8 +180,11 @@ async function refresh(app: App, force = false): Promise<void> {
     if (!state) return;
     state.board = loaded.board;
     state.posts = loaded.posts;
+    const roleChanged = state.isOwner !== loaded.isOwner || state.canClaim !== loaded.canClaim;
     state.isOwner = loaded.isOwner;
-    renderBody(app);
+    state.canClaim = loaded.canClaim;
+    if (roleChanged) render(app);
+    else renderBody(app);
   } catch {
     // Offline for a moment: the next tick tries again.
   }
@@ -219,6 +239,9 @@ function render(app: App): void {
         text: t("🔑 Join code · QR"),
         onclick: async () => {
           try {
+            // Before the link goes out to a class, give the board an
+            // instructor — otherwise the first student to try could take it.
+            if (s.canClaim && !(await claimBoard(app, true))) return;
             const code = await createJoinCode({ kind: "board", slug: s.board.slug });
             openJoinCodeDialog({
               title: t("Join code for this board"),
@@ -232,6 +255,13 @@ function render(app: App): void {
         },
       }),
       h("button", { class: "cb-btn", type: "button", text: t("📂 My boards"), onclick: () => openBoardList(app) }),
+      h("button", {
+        class: `cb-btn cb-instructor${s.isOwner ? " is-active" : ""}`,
+        type: "button",
+        text: s.isOwner ? t("🛡️ Instructor mode ON") : t("🛡️ Instructor mode"),
+        title: s.isOwner ? t("Click to see the board as students do") : t("Enter the instructor password to manage this board"),
+        onclick: () => void toggleInstructor(app),
+      }),
       s.isOwner
         ? h("button", {
             class: "cb-btn",
@@ -281,6 +311,8 @@ function renderBody(app: App): void {
       }),
     ),
     s.isOwner ? h("button", { class: "cb-pill is-add", type: "button", text: t("＋ Category"), onclick: () => void addCategory(app) }) : null,
+    // With a category picked, its owner can rename or remove it right here.
+    ...(s.isOwner && s.filter && s.board.sections.includes(s.filter) ? categoryTools(app, s.filter) : []),
   ]);
 
   let cards: HTMLElement;
@@ -291,7 +323,13 @@ function renderBody(app: App): void {
         .map((section) => {
           const items = visible.filter((post) => post.section === section);
           return h("div", { class: "cb-column" }, [
-            h("div", { class: "cb-column-title" }, [h("span", { text: section }), h("span", { class: "cb-count", text: String(items.length) })]),
+            h("div", { class: "cb-column-title" }, [
+              h("span", { text: section }),
+              h("span", { class: "cb-column-tools" }, [
+                ...(s.isOwner && s.board.sections.includes(section) ? categoryTools(app, section, true) : []),
+                h("span", { class: "cb-count", text: String(items.length) }),
+              ]),
+            ]),
             ...(items.length ? items.map((post) => card(app, post)) : [h("p", { class: "cb-empty", text: t("No posts yet") })]),
           ]);
         }),
@@ -307,6 +345,182 @@ function renderBody(app: App): void {
     );
   }
   body.replaceChildren(pills, cards);
+}
+
+/**
+ * Asks for a password in a small window. Resolves with the password, with ""
+ * when the optional step is skipped, or with null when it is closed.
+ */
+function askPassword(options: { title: string; text: string; action: string; skip?: string }): Promise<string | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      backdrop.remove();
+      resolve(value);
+    };
+    const input = h("input", {
+      class: "cb-input cb-pass-input",
+      type: "password",
+      autocomplete: "off",
+      maxlength: "100",
+      placeholder: t("Instructor password (4+ characters)"),
+    }) as HTMLInputElement;
+    const submit = () => {
+      const value = input.value.trim();
+      if (value.length < 4) {
+        failure(new Error("the password needs at least 4 characters"));
+        return;
+      }
+      finish(value);
+    };
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") submit();
+    });
+    const backdrop = h("div", { class: "modal-backdrop", onclick: (event: MouseEvent) => event.target === backdrop && finish(null) }, [
+      h("div", { class: "modal island cb-ai cb-pass" }, [
+        h("div", { class: "modal-header" }, [
+          h("h2", { text: options.title }),
+          h("button", { class: "cb-btn", type: "button", text: "✕", onclick: () => finish(null) }),
+        ]),
+        h("p", { class: "cb-hint", text: options.text }),
+        input,
+        h("div", { class: "cb-row cb-pass-actions" }, [
+          options.skip ? h("button", { class: "cb-btn cb-pass-skip", type: "button", text: options.skip, onclick: () => finish("") }) : null,
+          h("button", { class: "cb-btn is-primary cb-pass-go", type: "button", text: options.action, onclick: submit }),
+        ]),
+      ]),
+    ]);
+    document.body.appendChild(backdrop);
+    setTimeout(() => input.focus(), 0);
+  });
+}
+
+/**
+ * Sets the instructor password on a board that has none. Returns false only
+ * when the window was closed; skipping (where allowed) carries on.
+ */
+async function claimBoard(app: App, skippable = false): Promise<boolean> {
+  if (!state) return false;
+  const password = await askPassword({
+    title: t("🛡️ Become this board's instructor?"),
+    text: t("This board has no instructor yet. Choose a password: whoever knows it manages the board (categories, lock, removing posts) from any device."),
+    action: t("Set the password"),
+    skip: skippable ? t("Not now") : undefined,
+  });
+  if (password === null) return false;
+  if (!password) return true;
+  try {
+    await setBoardPassword(state.board, password);
+    setStudentView(state.board.slug, false);
+    await refresh(app, true);
+    message(t("Instructor mode is on"));
+  } catch (error) {
+    failure(error);
+  }
+  return true;
+}
+
+/** The 🛡️ button: on with the password, off to see what students see. */
+async function toggleInstructor(app: App): Promise<void> {
+  if (!state) return;
+  const s = state;
+  const slug = s.board.slug;
+  if (s.isOwner) {
+    setStudentView(slug, true);
+    await refresh(app, true);
+    message(t("Instructor mode is off — this is what students see"));
+    return;
+  }
+  if (isStudentView(slug)) {
+    setStudentView(slug, false);
+    await refresh(app, true);
+    if (state?.isOwner) {
+      message(t("Instructor mode is on"));
+      return;
+    }
+  }
+  if (s.canClaim) {
+    await claimBoard(app);
+    return;
+  }
+  const password = await askPassword({
+    title: t("🛡️ Instructor mode"),
+    text: t("Enter this board's instructor password to add or remove categories, lock the board and remove posts."),
+    action: t("Confirm"),
+  });
+  if (!password) return;
+  rememberBoardPassword(s.board, password);
+  await refresh(app, true);
+  if (state?.isOwner) {
+    message(t("Instructor mode is on"));
+  } else {
+    forgetBoardPassword(slug);
+    failure(new Error("Wrong instructor password"));
+  }
+}
+
+/** Rename and remove buttons for one category (icons only in a column head). */
+function categoryTools(app: App, section: string, compact = false): HTMLElement[] {
+  return [
+    h("button", {
+      class: `cb-cat-tool${compact ? " is-compact" : ""}`,
+      type: "button",
+      title: t("Rename this category"),
+      "aria-label": t("Rename this category"),
+      dataset: { catRename: section },
+      text: compact ? "✏️" : `✏️ ${t("Rename")}`,
+      onclick: () => void renameCategory(app, section),
+    }),
+    h("button", {
+      class: `cb-cat-tool${compact ? " is-compact" : ""}`,
+      type: "button",
+      title: t("Remove this category"),
+      "aria-label": t("Remove this category"),
+      dataset: { catRemove: section },
+      text: compact ? "🗑" : `🗑 ${t("Remove")}`,
+      onclick: () => removeCategory(app, section),
+    }),
+  ];
+}
+
+async function renameCategory(app: App, section: string): Promise<void> {
+  if (!state) return;
+  const name = prompt(t("New name for this category"), section)?.trim();
+  if (!name || name === section) return;
+  try {
+    state.board = await updateClassBoard(state.board.slug, { rename: { from: section, to: name } });
+    if (state.filter === section) state.filter = name;
+    await refresh(app, true);
+    render(app);
+  } catch (error) {
+    failure(error);
+  }
+}
+
+function removeCategory(app: App, section: string): void {
+  if (!state) return;
+  const s = state;
+  if (s.board.sections.length <= 1) {
+    failure(new Error("a board needs at least one category"));
+    return;
+  }
+  const count = s.posts.filter((post) => post.section === section).length;
+  const moveTo = s.board.sections.find((name) => name !== section)!;
+  const question = count
+    ? t("Remove '{name}'? Its {n} posts move to '{to}'.").replace("{name}", section).replace("{n}", String(count)).replace("{to}", moveTo)
+    : t("Remove the empty category '{name}'?").replace("{name}", section);
+  openConfirmDialog(t("Remove this category"), question, t("Remove"), async () => {
+    try {
+      s.board = await updateClassBoard(s.board.slug, { remove: section, moveTo });
+      if (s.filter === section) s.filter = null;
+      await refresh(app, true);
+      render(app);
+    } catch (error) {
+      failure(error);
+    }
+  });
 }
 
 async function addCategory(app: App): Promise<void> {
@@ -573,6 +787,66 @@ function composer(app: App): HTMLElement {
   return wrap;
 }
 
+/** Inline **bold** and `code`, as DOM nodes — never as HTML. */
+function inlineMarkdown(text: string): (Node | string)[] {
+  const parts: (Node | string)[] = [];
+  const pattern = /\*\*(.+?)\*\*|__(.+?)__|`([^`]+)`/g;
+  let last = 0;
+  for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+    if (match.index > last) parts.push(text.slice(last, match.index));
+    if (match[3] !== undefined) parts.push(h("code", { text: match[3] }));
+    else parts.push(h("strong", { text: match[1] ?? match[2] }));
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
+/**
+ * The AI's answer as headings, lists and bold text. Models write markdown
+ * whatever they are told, and shown raw it is a page of asterisks. Built
+ * from DOM nodes only, so nothing in the answer can run as markup.
+ */
+export function renderMarkdown(source: string): HTMLElement {
+  const root = h("div", { class: "cb-md" });
+  let list: HTMLElement | null = null;
+  const closeList = () => {
+    list = null;
+  };
+  for (const raw of source.replace(/\r/g, "").split("\n")) {
+    const line = raw.trim();
+    if (!line) {
+      closeList();
+      continue;
+    }
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(line)) {
+      closeList();
+      root.append(h("hr"));
+      continue;
+    }
+    const heading = /^#{1,6}\s+(.*)$/.exec(line) ?? /^\*\*([^*]+)\*\*:?$/.exec(line);
+    if (heading) {
+      closeList();
+      root.append(h("h3", {}, inlineMarkdown(heading[1].replace(/\*\*/g, ""))));
+      continue;
+    }
+    const bullet = /^[-*•]\s+(.*)$/.exec(line);
+    const numbered = /^\d+[.)]\s+(.*)$/.exec(line);
+    if (bullet || numbered) {
+      const tag = bullet ? "ul" : "ol";
+      if (!list || list.tagName.toLowerCase() !== tag) {
+        list = h(tag);
+        root.append(list);
+      }
+      list.append(h("li", {}, inlineMarkdown((bullet ?? numbered)![1])));
+      continue;
+    }
+    closeList();
+    root.append(h("p", {}, inlineMarkdown(line)));
+  }
+  return root;
+}
+
 async function runAi(slug: string, mode: "summary" | "quiz"): Promise<void> {
   const output = h("div", { class: "cb-ai-text", text: t("Reading the board…") });
   const backdrop = h("div", { class: "modal-backdrop", onclick: (event: MouseEvent) => event.target === backdrop && backdrop.remove() }, [
@@ -586,7 +860,7 @@ async function runAi(slug: string, mode: "summary" | "quiz"): Promise<void> {
   ]);
   document.body.appendChild(backdrop);
   try {
-    output.textContent = await askBoardAi(slug, mode);
+    output.replaceChildren(renderMarkdown(await askBoardAi(slug, mode)));
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
     output.textContent = t(/not configured/.test(text) ? "AI is not set up on this server yet" : text);

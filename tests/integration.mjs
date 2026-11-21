@@ -1036,8 +1036,13 @@ try {
     const tb = await teacherB.open();
     await tb.evaluate(() => document.querySelector(".welcome")?.remove());
     await tb.evaluate(() => window.axdraw.renameBoard(window.axdraw.currentBoardId(), "행안부 블루과정"));
+    // Making a board asks for the instructor password: the instructor is
+    // whoever knows it, not whoever pressed the button.
     await tb.click(".board-btn");
+    await tb.fill(".cb-pass-input", "강사비번-2026");
+    await tb.click(".cb-pass-go");
     await tb.waitForSelector(".class-board .cb-title");
+    await tb.waitForSelector(".cb-instructor.is-active", { timeout: 10000 });
     const slug = await tb.evaluate(() => window.axdraw.classBoardSlug());
     check(
       "the Board button makes a board for the canvas and pairs the two",
@@ -1133,6 +1138,37 @@ try {
     await tb.click(".cb-pill.is-add");
     await tb.waitForFunction(() => [...document.querySelectorAll(".cb-pill")].some((p) => p.textContent.startsWith("3교시 실습")), null, { timeout: 10000 });
     check("the board's owner adds a category in one click", true);
+
+    // ...and renames or removes one, with its posts following.
+    await tb.click(".cb-pill >> text=/^1교시 /");
+    await tb.evaluate(() => { window.prompt = () => "오전 수업"; });
+    await tb.click("[data-cat-rename]");
+    await tb.waitForFunction(() => [...document.querySelectorAll(".cb-pill")].some((p) => p.textContent.startsWith("오전 수업")), null, { timeout: 10000 });
+    const renamed = await tb.evaluate(async (slug) => {
+      const board = await fetch(`/api/boards/${slug}`).then((r) => r.json());
+      return { sections: board.board.sections, post: board.posts.find((p) => p.title === "1교시 안내").section };
+    }, slug);
+    check(
+      "the owner renames a category and its posts follow",
+      renamed.sections.includes("오전 수업") && !renamed.sections.includes("1교시") && renamed.post === "오전 수업",
+      JSON.stringify(renamed),
+    );
+    await tb.click("[data-cat-remove]");
+    await tb.click(".modal .primary-btn");
+    await tb.waitForFunction(() => ![...document.querySelectorAll(".cb-pill")].some((p) => p.textContent.startsWith("오전 수업")), null, { timeout: 10000 });
+    const afterRemove = await tb.evaluate(async (slug) => {
+      const board = await fetch(`/api/boards/${slug}`).then((r) => r.json());
+      return { sections: board.board.sections, post: board.posts.find((p) => p.title === "1교시 안내").section };
+    }, slug);
+    check(
+      "the owner removes a category and its posts move to another",
+      !afterRemove.sections.includes("오전 수업") && afterRemove.sections.includes(afterRemove.post),
+      JSON.stringify(afterRemove),
+    );
+    const studentRename = await sb.evaluate(async (slug) =>
+      (await fetch(`/api/boards/${slug}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ remove: "2교시" }) })).status,
+    slug);
+    check("a student cannot rename or remove categories", studentRename === 403 && !(await sb.locator("[data-cat-rename]").count()), String(studentRename));
     await tb.evaluate(() => window.dispatchEvent(new Event("focus")));
     const studentPostId = await tb.evaluate(async (slug) => {
       const board = await fetch(`/api/boards/${slug}`).then((r) => r.json());
@@ -1140,9 +1176,31 @@ try {
     }, slug);
     const removed = await tb.evaluate(async ({ slug, id }) => {
       const key = JSON.parse(localStorage.getItem("axdraw:class-boards")).find((b) => b.slug === slug).ownerKey;
-      return (await fetch(`/api/boards/${slug}/posts/${id}`, { method: "DELETE", headers: { "x-board-key": key } })).status;
+      return (await fetch(`/api/boards/${slug}/posts/${id}`, { method: "DELETE", headers: { "x-board-key": encodeURIComponent(key) } })).status;
     }, { slug, id: studentPostId });
     check("the board's owner can remove any post", removed === 200, String(removed));
+
+    // Instructor mode is the password, on any device — and nothing else.
+    await sb.click(".cb-instructor");
+    await sb.fill(".cb-pass-input", "틀린비번");
+    await sb.click(".cb-pass-go");
+    await sb.waitForTimeout(1500);
+    check(
+      "a wrong instructor password opens nothing",
+      !(await sb.locator(".cb-instructor.is-active").count()) && !(await sb.locator(".cb-pill.is-add").count()),
+    );
+    const takeover = await sb.evaluate(async (slug) =>
+      (await fetch(`/api/boards/${slug}/admin`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "내가강사" }) })).status,
+    slug);
+    check("a student cannot replace the instructor password", takeover === 403, String(takeover));
+    await sb.click(".cb-instructor");
+    await sb.fill(".cb-pass-input", "강사비번-2026");
+    await sb.click(".cb-pass-go");
+    await sb.waitForSelector(".cb-instructor.is-active", { timeout: 10000 });
+    check("the right password switches instructor mode on, on another device", (await sb.locator(".cb-pill.is-add").count()) === 1);
+    await sb.click(".cb-instructor");
+    await sb.waitForFunction(() => !document.querySelector(".cb-instructor.is-active"), null, { timeout: 10000 });
+    check("switching instructor mode off shows the student view", !(await sb.locator(".cb-pill.is-add").count()));
 
     // A locked board takes no new posts from students.
     await tb.click(".cb-btn >> text=/잠그기|Lock/");
@@ -1170,9 +1228,18 @@ try {
     const host = await (await profile("code-teacher")).open();
     await host.evaluate(() => document.querySelector(".welcome")?.remove());
     await host.click(".board-btn");
+    await host.click(".cb-pass-skip");
     await host.waitForSelector(".class-board .cb-title");
+    check(
+      "making a board without a password makes nobody its instructor",
+      !(await host.locator(".cb-instructor.is-active").count()) && !(await host.locator(".cb-pill.is-add").count()),
+    );
+    // Sharing it asks once more, since anyone could take an unclaimed board.
     await host.click(".cb-code");
+    await host.fill(".cb-pass-input", "share-2026");
+    await host.click(".cb-pass-go");
     await host.waitForSelector(".join-code");
+    check("setting the password while sharing switches instructor mode on", (await host.locator(".cb-instructor.is-active").count()) === 1);
     const boardCode = (await host.getAttribute(".join-code", "aria-label")) ?? "";
     const qrModules = await host.evaluate(() => (document.querySelector(".join-qr svg path")?.getAttribute("d") ?? "").split("M").length - 1);
     const boardSlug = await host.evaluate(() => window.axdraw.classBoardSlug());
@@ -1225,6 +1292,8 @@ try {
     await ol.waitForFunction(() => document.querySelector(".cloud-chip")?.dataset.state === "saved", null, { timeout: 20000 });
     await ol.keyboard.press("Escape");
     await ol.click(".board-btn");
+    await ol.fill(".cb-pass-input", "account-2026");
+    await ol.click(".cb-pass-go");
     await ol.waitForSelector(".class-board .cb-title");
     const ownedSlug = await ol.evaluate(() => window.axdraw.classBoardSlug());
     await ol.evaluate(() => window.axdraw.cloud.flushRooms());
@@ -1241,11 +1310,11 @@ try {
     await ot.evaluate((slug) => { location.hash = `#board=${slug}`; }, ownedSlug);
     await ot.waitForSelector(".class-board .cb-title", { timeout: 15000 });
     const tabletOwner = await ot.evaluate(() => Boolean(document.querySelector(".cb-pill.is-add")));
-    check("a board made on one device is managed from the account's other devices", tabletOwner);
+    check("the instructor password follows the account to its other devices", tabletOwner);
 
     await ot.evaluate(() => window.axdraw.logout());
     const leftKeys = await ot.evaluate(() => localStorage.getItem("axdraw:class-boards"));
-    check("logging out removes the board owner keys from that computer", leftKeys === null, String(leftKeys));
+    check("logging out removes the instructor passwords from that computer", leftKeys === null, String(leftKeys));
     await ownerLaptop.context.close();
     await ownerTablet.context.close();
   }
