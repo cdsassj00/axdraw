@@ -2272,6 +2272,49 @@ try {
     );
   }
 
+  /* ---------------- straight arrows are edited by their ends ---------------- */
+
+  // A flat arrow's box has no height, so its eight resize handles all sat on
+  // the line: grabbing an end to move it caught a corner handle, the box
+  // stretched and the line stayed flat along the bottom of an empty frame.
+  {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+    const tab = await context.newPage();
+    tab.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
+    await tab.goto(BASE, { waitUntil: "networkidle" });
+    await tab.waitForFunction(() => Boolean(window.axdraw));
+    await tab.evaluate(() => document.querySelector(".welcome")?.remove());
+    const dragTo = async (from, to) => {
+      await tab.mouse.move(...from);
+      await tab.mouse.down();
+      await tab.mouse.move(...to, { steps: 10 });
+      await tab.mouse.up();
+    };
+    const arrow = () => tab.evaluate(() => {
+      const a = window.axdraw.elements.filter((e) => e.type === "arrow" && !e.isDeleted).at(-1);
+      const ys = a.points.map((p) => p[1]);
+      return { x: Math.round(a.x), y: Math.round(a.y), h: Math.round(a.height), points: a.points.length,
+        fits: Math.abs(Math.max(...ys) - Math.min(...ys) - a.height) < 0.5 && Math.min(...ys) === 0,
+        ends: a.points.map(([px, py]) => [Math.round(a.x + px), Math.round(a.y + py)]) };
+    });
+    await tab.keyboard.press("a");
+    await dragTo([300, 400], [620, 400]);
+    await dragTo([620, 400], [640, 480]); // the right end, pulled down
+    const moved = await arrow();
+    check(
+      "dragging an end of a flat arrow moves that end, and the box follows the line",
+      moved.fits && moved.ends[0][0] === 300 && moved.ends[0][1] === 400 && moved.ends[1][0] === 640 && moved.ends[1][1] === 480,
+      JSON.stringify(moved),
+    );
+    await tab.keyboard.press("Escape");
+    await tab.keyboard.press("a");
+    await dragTo([300, 600], [620, 600]);
+    await dragTo([460, 600], [460, 520]); // the middle dot, pulled up
+    const bent = await arrow();
+    check("dragging the middle dot bends the arrow", bent.points === 3 && bent.fits && bent.ends[1][1] === 520, JSON.stringify(bent));
+    await context.close();
+  }
+
   check("no console or page errors", errors.length === 0, errors.join(" | "));
 
   console.log(`\n${passed} passed, ${failed} failed`);

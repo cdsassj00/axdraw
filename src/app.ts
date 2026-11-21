@@ -540,7 +540,7 @@ export class App implements CloudHost {
       } else {
         selectionBounds = getSelectionBounds(selected);
       }
-      if (showHandles && selectionBounds) {
+      if (showHandles && selectionBounds && !this.soleSimpleLinear(selected)) {
         const isSingleLinear = selected.length === 1 && isLinear(selected[0]) && selected[0].points.length > 2;
         handles = getTransformHandles(selectionBounds, selectionAngle, this.state.zoom, {
           omitRotation: isSingleLinear,
@@ -548,9 +548,12 @@ export class App implements CloudHost {
       }
     }
 
+    // A selected straight line or arrow shows its two ends to drag.
     const editingLinear = this.editingLinearId
       ? (this.elements.find((element) => element.id === this.editingLinearId) as LinearElement | undefined)
-      : undefined;
+      : showHandles
+        ? this.soleSimpleLinear(selected) ?? undefined
+        : undefined;
 
     renderInteractiveScene(this.interactiveCanvas, {
       elements: this.elements,
@@ -798,9 +801,45 @@ export class App implements CloudHost {
     }
   };
 
+  /**
+   * The one selected straight line or arrow (two points), if that is the
+   * selection. It is edited by its two ends, never by a box: a flat arrow's
+   * box has no height, so all eight resize handles sat on the line itself,
+   * and grabbing an end to move it caught a corner handle instead. The box
+   * then stretched while the line stayed flat — an arrow lying along the
+   * bottom of a tall empty frame.
+   */
+  private soleSimpleLinear(selected: readonly AxElement[] = this.getSelectedElements()): LinearElement | null {
+    if (selected.length !== 1) return null;
+    const element = selected[0];
+    if (!isLinear(element) || element.points.length !== 2 || element.locked) return null;
+    return element;
+  }
+
   private handleSelectionPointerDown(event: PointerEvent, scene: Point): void {
     const threshold = HIT_THRESHOLD / this.state.zoom;
     const selected = this.getSelectedElements();
+
+    // 0. The ends of a selected straight line or arrow.
+    const simple = this.editingLinearId ? null : this.soleSimpleLinear(selected);
+    if (simple) {
+      const end = getLinearPointIndexAt(simple, scene, Math.max(threshold, this.handleHitRadius / this.state.zoom));
+      if (end !== -1) {
+        this.pointerMode = { type: "linearPoint", element: simple, index: end };
+        return;
+      }
+      // The small dot in the middle bends it, as in Excalidraw. Kept tight so
+      // grabbing the line anywhere else still moves the whole arrow.
+      if (getLinearMidpointIndexAt(simple, scene, 7 / this.state.zoom) === 0) {
+        const local = this.toElementLocal(simple, scene);
+        const points = simple.points.map((point) => [...point] as [number, number]);
+        points.splice(1, 0, [local.x, local.y]);
+        mutateElement(simple, { points });
+        this.pointerMode = { type: "linearPoint", element: simple, index: 1 };
+        this.scheduleRender();
+        return;
+      }
+    }
 
     // 1. Line editor points.
     if (this.editingLinearId) {
@@ -828,8 +867,8 @@ export class App implements CloudHost {
       }
     }
 
-    // 2. Transform handles.
-    if (selected.length && !selected.some((element) => element.locked)) {
+    // 2. Transform handles (none on a straight line or arrow: see above).
+    if (selected.length && !simple && !selected.some((element) => element.locked)) {
       const bounds =
         selected.length === 1
           ? {
@@ -1535,12 +1574,25 @@ export class App implements CloudHost {
         else this.notify();
         break;
       case "resize":
+        // A resized line or arrow gets its box back from its points, so the
+        // two can never drift apart (a squashed or flat line scaled oddly).
+        for (const element of this.getSelectedElements()) if (hasPoints(element)) normalizePoints(element);
+        this.commit();
+        break;
       case "rotate":
         this.commit();
         break;
       case "linearPoint": {
         normalizePoints(mode.element);
-        refreshArrowBindings([mode.element], this.elements);
+        const last = mode.element.points.length - 1;
+        if (mode.element.type === "arrow" && (mode.index === 0 || mode.index === last)) {
+          // A moved end belongs to whatever it now rests on, or to nothing:
+          // keeping the old binding would snap it straight back.
+          mutateElement(mode.element, mode.index === 0 ? { startBinding: null } : { endBinding: null });
+          this.finalizeLinear(mode.element);
+        } else {
+          refreshArrowBindings([mode.element], this.elements);
+        }
         this.commit();
         break;
       }
