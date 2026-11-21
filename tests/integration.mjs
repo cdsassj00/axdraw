@@ -961,6 +961,144 @@ try {
     );
   }
 
+  /* -------------------------------------------------- class boards -- */
+
+  // A teacher opens a post-it board from a canvas; students post to it from
+  // the link. Permissions are enforced on the server, and uploaded files can
+  // never run as part of the site.
+  if (!LIVE) {
+    const teacherB = await profile("board-teacher");
+    const tb = await teacherB.open();
+    await tb.evaluate(() => document.querySelector(".welcome")?.remove());
+    await tb.evaluate(() => window.axdraw.renameBoard(window.axdraw.currentBoardId(), "행안부 블루과정"));
+    await tb.click(".board-btn");
+    await tb.waitForSelector(".class-board .cb-title");
+    const slug = await tb.evaluate(() => window.axdraw.classBoardSlug());
+    check(
+      "the Board button makes a board for the canvas and pairs the two",
+      /^[A-Z0-9]{8}$/.test(slug ?? "") && (await tb.textContent(".cb-title")) === "행안부 블루과정",
+      String(slug),
+    );
+    const post = async (page, { title, text = "", link = "", file = null }) => {
+      await page.click(".cb-composer-collapsed");
+      await page.locator(".cb-composer .cb-input.is-title").fill(title);
+      if (text) await page.locator(".cb-composer textarea").fill(text);
+      if (link) await page.locator(".cb-composer input[type=url]").fill(link);
+      if (file) await page.setInputFiles(".cb-composer input[type=file]", file);
+      const before = await page.locator(".cb-card").count();
+      await page.click(".cb-composer .cb-btn.is-primary");
+      await page.waitForFunction((n) => document.querySelectorAll(".cb-card").length > n, before, { timeout: 15000 });
+    };
+    await post(tb, { title: "1교시 안내", text: "오늘 실습 사이트", link: "axdraw.org" });
+    check(
+      "a post with a link shows a link card",
+      (await tb.locator(".cb-card .cb-link-host").first().textContent()) === "axdraw.org" &&
+        (await tb.locator(".cb-card .cb-link").first().getAttribute("href")) === "https://axdraw.org/",
+    );
+
+    // A student opens the link on another device.
+    const studentB = await profile("board-student");
+    const sb = await studentB.open(`${BASE}/#board=${slug}`);
+    await sb.waitForSelector(".class-board .cb-card", { timeout: 15000 });
+    const studentCanvas = await sb.evaluate(() => ({ name: window.axdraw.currentBoardName(), slug: window.axdraw.classBoardSlug() }));
+    check(
+      "opening a board link shows the board, on a canvas of its own paired with it",
+      studentCanvas.slug === slug && studentCanvas.name === "행안부 블루과정",
+      JSON.stringify(studentCanvas),
+    );
+    await post(sb, { title: "제 과제", file: { name: "과제 보고서.hwpx", mimeType: "application/hwp+zip", buffer: Buffer.from("PK hwpx body") } });
+    const download = await sb.locator(".cb-card .cb-file a", { hasText: /받기|Download/ }).first().getAttribute("href");
+    const fileResponse = await fetch(new URL(download, BASE));
+    check(
+      "an uploaded file downloads with its original Korean name",
+      fileResponse.ok &&
+        (await fileResponse.text()) === "PK hwpx body" &&
+        fileResponse.headers.get("content-disposition") === `attachment; filename*=UTF-8''${encodeURIComponent("과제 보고서.hwpx")}`,
+      fileResponse.headers.get("content-disposition") ?? String(fileResponse.status),
+    );
+
+    // An uploaded page must never run under the site's origin.
+    const evil = await sb.evaluate(async (slug) => {
+      const up = await fetch(`/api/boards/${slug}/files`, {
+        method: "POST",
+        headers: { "content-type": "text/html", "x-file-name": "page.html" },
+        body: "<script>alert(1)</script>",
+      }).then((r) => r.json());
+      const served = await fetch(`/api/boards/${slug}/files/${up.file.id}`);
+      return {
+        type: served.headers.get("content-type"),
+        disposition: served.headers.get("content-disposition"),
+        nosniff: served.headers.get("x-content-type-options"),
+        csp: served.headers.get("content-security-policy"),
+      };
+    }, slug);
+    check(
+      "an uploaded HTML file is served as an inert download",
+      evil.type === "application/octet-stream" && evil.disposition.startsWith("attachment") && evil.nosniff === "nosniff" && /sandbox/.test(evil.csp ?? ""),
+      JSON.stringify(evil),
+    );
+
+    // Permissions: the student cannot remove the teacher's post or change the board.
+    const denied = await sb.evaluate(async (slug) => {
+      const board = await fetch(`/api/boards/${slug}`).then((r) => r.json());
+      const teacherPost = board.posts.find((p) => p.title === "1교시 안내");
+      const del = await fetch(`/api/boards/${slug}/posts/${teacherPost.id}`, { method: "DELETE" });
+      const patch = await fetch(`/api/boards/${slug}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sections: ["해킹"] }),
+      });
+      return { del: del.status, patch: patch.status, isOwner: board.isOwner };
+    }, slug);
+    check(
+      "a student cannot remove someone else's post or change the board",
+      denied.del === 403 && denied.patch === 403 && denied.isOwner === false,
+      JSON.stringify(denied),
+    );
+    check("a student sees no remove button on others' posts, but has one on their own", await sb.evaluate(() => {
+      const cards = [...document.querySelectorAll(".cb-card")];
+      const own = cards.find((c) => c.textContent.includes("제 과제"));
+      const other = cards.find((c) => c.textContent.includes("1교시 안내"));
+      const hasRemove = (card) => [...card.querySelectorAll(".cb-act")].some((b) => b.textContent === "🗑");
+      return hasRemove(own) && !hasRemove(other);
+    }));
+
+    // The teacher adds a category in one click, sees the student's post, and can remove it.
+    await tb.evaluate(() => { window.prompt = () => "3교시 실습"; });
+    await tb.click(".cb-pill.is-add");
+    await tb.waitForFunction(() => [...document.querySelectorAll(".cb-pill")].some((p) => p.textContent.startsWith("3교시 실습")), null, { timeout: 10000 });
+    check("the board's owner adds a category in one click", true);
+    await tb.evaluate(() => window.dispatchEvent(new Event("focus")));
+    const studentPostId = await tb.evaluate(async (slug) => {
+      const board = await fetch(`/api/boards/${slug}`).then((r) => r.json());
+      return board.posts.find((p) => p.title === "제 과제").id;
+    }, slug);
+    const removed = await tb.evaluate(async ({ slug, id }) => {
+      const key = JSON.parse(localStorage.getItem("axdraw:class-boards")).find((b) => b.slug === slug).ownerKey;
+      return (await fetch(`/api/boards/${slug}/posts/${id}`, { method: "DELETE", headers: { "x-board-key": key } })).status;
+    }, { slug, id: studentPostId });
+    check("the board's owner can remove any post", removed === 200, String(removed));
+
+    // A locked board takes no new posts from students.
+    await tb.click(".cb-btn >> text=/잠그기|Lock/");
+    await tb.waitForSelector(".cb-badge >> text=/잠김|Locked/", { timeout: 10000 });
+    const lockedPost = await sb.evaluate(async (slug) =>
+      (await fetch(`/api/boards/${slug}/posts`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: "늦은 글" }) })).status,
+    slug);
+    check("a locked board refuses students' posts", lockedPost === 403, String(lockedPost));
+
+    // The pairing travels with the canvas to the teacher's other devices.
+    const paired = await tb.evaluate(() => {
+      const app = window.axdraw;
+      return JSON.parse(JSON.stringify(app.listBoards().find((b) => b.id === app.currentBoardId())));
+    });
+    check("the canvas remembers its board", paired.classBoard === slug, JSON.stringify(paired));
+    await tb.click(".cb-btn >> text=/← 캔버스|← Canvas/");
+    check("'← Canvas' goes back to the paired canvas", !(await tb.locator(".class-board").count()) && (await tb.evaluate(() => window.axdraw.classBoardSlug())) === slug);
+    await teacherB.context.close();
+    await studentB.context.close();
+  }
+
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (error) {
   if (error !== "done") {
