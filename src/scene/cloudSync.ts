@@ -70,6 +70,8 @@ export interface CloudHost {
 interface CloudPayload extends CloudScene {
   /** The board's live room, so it reconnects on other devices too. */
   room?: BoardMeta["room"];
+  /** The class board paired with it, so the pairing follows the account. */
+  classBoard?: string;
 }
 
 export class CloudSync {
@@ -371,7 +373,8 @@ export class CloudSync {
   private sceneOf(boardId: string): CloudPayload {
     const scene =
       boardId === this.host.currentBoardId() ? this.host.currentScene() : readBoardScene(boardId);
-    return { elements: [...scene.elements], files: scene.files, room: getBoard(boardId)?.room };
+    const board = getBoard(boardId);
+    return { elements: [...scene.elements], files: scene.files, room: board?.room, classBoard: board?.classBoard };
   }
 
   /** Downloads a board's cloud copy and merges it into this browser's. */
@@ -402,6 +405,7 @@ export class CloudSync {
 
   private mergeInto(boardId: string, payload: CloudPayload): void {
     if (payload.room && !getBoard(boardId)?.room) setBoardLink(boardId, { room: payload.room });
+    if (payload.classBoard && !getBoard(boardId)?.classBoard) setBoardLink(boardId, { classBoard: payload.classBoard });
     if (boardId === this.host.currentBoardId()) {
       this.host.mergeIntoCurrent(payload.elements, payload.files ?? {});
       return;
@@ -419,7 +423,7 @@ export class CloudSync {
     // The room link is part of what is saved: starting or stopping a live room
     // on a canvas must reach the account even when nothing is drawn after.
     const board = getBoard(boardId);
-    return `${sceneSignature(scene.elements, scene.files)}|${board?.name ?? ""}|${board?.room?.id ?? ""}`;
+    return `${sceneSignature(scene.elements, scene.files)}|${board?.name ?? ""}|${board?.room?.id ?? ""}|${board?.classBoard ?? ""}`;
   }
 
   /** Fingerprint of what the cloud holds for a board, if known. */

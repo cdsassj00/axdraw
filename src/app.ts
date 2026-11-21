@@ -135,6 +135,7 @@ import {
   createBoard,
   currentBoardId,
   deleteBoard,
+  findBoardByClassBoard,
   findBoardByRoom,
   findBoardByShare,
   getBoard,
@@ -3226,6 +3227,35 @@ export class App implements CloudHost {
   }
 
   /** Live elements on a board, whether or not it is the one open. */
+  /** The class board paired with the open canvas, if any. */
+  classBoardSlug(): string | undefined {
+    return getBoard(currentBoardId())?.classBoard;
+  }
+
+  /** Pairs the open canvas with a class board; the pairing syncs like a room link. */
+  linkClassBoard(slug: string): void {
+    setBoardLink(currentBoardId(), { classBoard: slug });
+    this.cloud.changed();
+    this.notify();
+  }
+
+  /**
+   * Shows the canvas paired with a class board — opening its link on a new
+   * device lands on a canvas of its own, never over someone's current work.
+   */
+  openCanvasForClassBoard(slug: string, title: string): void {
+    const paired = findBoardByClassBoard(slug);
+    if (paired) {
+      if (paired.id !== currentBoardId()) this.openBoard(paired.id);
+      return;
+    }
+    const current = getBoard(currentBoardId());
+    const blank = !this.boardDrawingCount(currentBoardId()) && !current?.room && !current?.classBoard && !current?.shareId;
+    if (!blank) this.newBoard();
+    this.renameBoard(currentBoardId(), title);
+    this.linkClassBoard(slug);
+  }
+
   boardDrawingCount(id: string): number {
     const elements = id === currentBoardId() ? this.elements : readBoardScene(id).elements;
     return elements.filter((element) => !element.isDeleted).length;

@@ -61,6 +61,8 @@ export interface BoardMeta {
   cloudSynced?: number;
   /** Listed in the cloud but not yet downloaded to this browser. */
   remote?: boolean;
+  /** The class board (post-it wall) paired with this canvas, by its slug. */
+  classBoard?: string;
   /**
    * Fingerprint of what the cloud copy holds. Kept across reloads so that
    * opening an unchanged canvas does not upload it all over again.
@@ -237,7 +239,7 @@ export function deleteBoard(id: string): void {
 /** Attaches (or with `undefined`, detaches) a room or share link to a board. */
 export function setBoardLink(
   id: string,
-  link: Partial<Pick<BoardMeta, "room" | "shareId" | "cloudSynced" | "remote" | "cloudSignature">>,
+  link: Partial<Pick<BoardMeta, "room" | "shareId" | "cloudSynced" | "remote" | "cloudSignature" | "classBoard">>,
 ): void {
   writeIndex(readIndex().map((board) => (board.id === id ? { ...board, ...link } : board)));
 }
@@ -280,6 +282,10 @@ function keepable(elements: readonly AxElement[]): AxElement[] {
 
 export function findBoardByRoom(roomId: string): BoardMeta | undefined {
   return readIndex().find((board) => board.room?.id === roomId);
+}
+
+export function findBoardByClassBoard(slug: string): BoardMeta | undefined {
+  return readIndex().find((board) => board.classBoard === slug);
 }
 
 export function findBoardByShare(shareId: string): BoardMeta | undefined {

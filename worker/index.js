@@ -18,11 +18,14 @@
  *   DELETE /api/cloud/canvases/:id  (Bearer)
  *   GET    /api/cloud/canvases/:id/history[/:stamp] (Bearer) → earlier copies
  *   GET|DELETE /api/cloud/account, POST /api/cloud/consent  (Bearer)
+ *   /api/boards…  class post-it boards — see worker/boards.js
  *
  * CORS is open on purpose: ids are unguessable (60 bits) and the content is
  * ciphertext, so the origin of the reader adds no protection worth having,
  * while an open policy lets a GitHub Pages build use this Worker as its API.
  */
+
+import { handleBoards } from "./boards.js";
 
 const MAX_BYTES = 20 * 1024 * 1024; // KV values cap at 25 MiB; leave headroom.
 // Cloud canvases stream straight to R2, never held in memory, so they can be
@@ -39,8 +42,9 @@ const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456
 
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "access-control-allow-headers": "content-type, x-ai-key, authorization, x-canvas-name, x-base-version",
+  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+  "access-control-allow-headers":
+    "content-type, x-ai-key, authorization, x-canvas-name, x-base-version, x-board-key, x-post-key, x-file-name",
   "access-control-expose-headers": "x-room-store, x-room-version, x-canvas-updated",
 };
 
@@ -1002,6 +1006,19 @@ export default {
         const reply = completion.choices?.[0]?.message?.content?.trim();
         if (!reply) return json({ error: "AI returned no reply" }, 502);
         return json({ reply });
+      }
+
+      // Class boards: Padlet-style post-it walls paired with canvases.
+      if (url.pathname === "/api/boards" || url.pathname.startsWith("/api/boards/")) {
+        try {
+          return await handleBoards(request, env, url, {
+            json,
+            cors: CORS_HEADERS,
+            resolveAi: (req) => resolveAiProvider(req, env, env.AI_CHAT_MODEL, CHAT_PREFERENCES),
+          });
+        } catch (error) {
+          return json({ error: "board request failed", detail: String(error).slice(0, 200) }, 500);
+        }
       }
 
       if (url.pathname.startsWith("/api/cloud/") || url.pathname.startsWith("/api/account/")) {

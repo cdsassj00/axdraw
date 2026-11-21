@@ -25,6 +25,7 @@ import { LOCALE_NAMES, locale, setLocale, t, type Locale } from "../i18n";
 import { button, dismissable, h } from "./dom";
 import { iconEl } from "./icons";
 import { openRecoverDialog } from "./recover";
+import { openBoardForCanvas } from "./classBoard";
 import { createCommandPalette } from "./commandPalette";
 import { createRecognitionChip } from "./recognitionChip";
 import { forgetRoom, listRecentRooms, roomUrl } from "../scene/recentRooms";
@@ -293,6 +294,13 @@ export function createUI(app: App): void {
             }),
           ]
         : []),
+      h("button", {
+        class: `board-btn${app.classBoardSlug() ? " is-paired" : ""}`,
+        type: "button",
+        title: t("Class board — post-its, links and files for this canvas"),
+        "aria-label": t("Class board"),
+        onclick: () => void openBoardForCanvas(app),
+      }, [h("span", { text: "📋" }), h("span", { class: "board-label", text: ` ${t("Board")}` })]),
       h(
         "button",
         {
@@ -954,6 +962,7 @@ function openMainMenu(app: App, root: HTMLElement, anchor: HTMLElement, refresh:
     menuItem("plus", "New canvas", null, run(() => app.newBoard())),
     menuItem("duplicate", "Boards…", null, run(() => openBoardsDialog(app))),
     menuItem("undo", "되살리기 (지운 도형 · 이전 버전)…", null, run(() => openRecoverDialog(app))),
+    menuItem("users", "Class board…", null, run(() => void openBoardForCanvas(app))),
     menuItem("trash", "Remove empty canvases and rooms", null, run(() => {
       void app.cleanupEmpty().then((removed) => app.reportCleanup(removed));
     })),
