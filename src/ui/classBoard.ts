@@ -62,6 +62,8 @@ let layer: HTMLElement | null = null;
 let state: State | null = null;
 let refreshTimer: number | null = null;
 let currentApp: App | null = null;
+/** Attaches a dropped file to the composer; null while posting is closed. */
+let attachDropped: ((file: File) => void) | null = null;
 
 function message(text: string): void {
   currentApp?.onMessage?.(text);
@@ -132,6 +134,7 @@ export function closeBoard(): void {
   refreshTimer = null;
   layer?.remove();
   layer = null;
+  attachDropped = null;
   state = null;
   if (location.hash.startsWith("#board=")) history.replaceState(null, "", `${location.pathname}${location.search}`);
 }
@@ -161,8 +164,36 @@ async function showBoard(app: App, slug: string, pairCanvas = false): Promise<vo
   };
   history.replaceState(null, "", `${location.pathname}${location.search}#board=${slug}`);
   if (!layer) {
-    layer = h("div", { class: "class-board", role: "dialog", "aria-label": t("Class board") });
-    document.body.appendChild(layer);
+    const board = h("div", { class: "class-board", role: "dialog", "aria-label": t("Class board") });
+    layer = board;
+    document.body.appendChild(board);
+    // Drop a file anywhere on the board to start a post-it with it attached.
+    // Only real files count: dragging a card out carries no "Files".
+    const carriesFiles = (event: DragEvent) => Boolean(event.dataTransfer?.types.includes("Files"));
+    let depth = 0;
+    board.addEventListener("dragenter", (event) => {
+      if (!carriesFiles(event) || !attachDropped) return;
+      depth++;
+      board.classList.add("is-dropping");
+    });
+    board.addEventListener("dragover", (event) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = attachDropped ? "copy" : "none";
+    });
+    board.addEventListener("dragleave", (event) => {
+      if (!carriesFiles(event)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) board.classList.remove("is-dropping");
+    });
+    board.addEventListener("drop", (event) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      depth = 0;
+      board.classList.remove("is-dropping");
+      const dropped = event.dataTransfer?.files?.[0];
+      if (dropped && attachDropped) attachDropped(dropped);
+    });
   }
   render(app);
   if (refreshTimer !== null) window.clearInterval(refreshTimer);
@@ -563,17 +594,46 @@ function card(app: App, post: BoardPost): HTMLElement {
   let file: HTMLElement | null = null;
   if (post.file) {
     const f = post.file;
+    const absolute = (download: boolean) => new URL(fileUrl(slug, f, download), location.href).href;
+    // Dragging the card out of the browser saves the file where it is
+    // dropped (a desktop, a folder), under its own name.
+    const dragOut = (event: DragEvent) => {
+      event.dataTransfer?.setData("DownloadURL", `${f.type || "application/octet-stream"}:${f.name}:${absolute(true)}`);
+      event.dataTransfer?.setData("text/uri-list", absolute(true));
+      event.dataTransfer?.setData("text/plain", absolute(true));
+    };
     if (INLINE_IMAGES.includes(f.type)) {
-      file = h("a", { class: "cb-image", href: fileUrl(slug, f), target: "_blank", rel: "noopener" }, [
+      file = h("a", { class: "cb-image", href: fileUrl(slug, f), target: "_blank", rel: "noopener", title: t("Click to open — or drag it out to save"), ondragstart: dragOut }, [
         h("img", { src: fileUrl(slug, f), alt: f.name, loading: "lazy" }),
       ]);
     } else {
-      file = h("div", { class: "cb-file" }, [
-        h("span", { class: "cb-file-icon", text: fileIcon(f) }),
-        h("span", { class: "cb-link-meta" }, [h("span", { class: "cb-link-host", text: f.name }), h("span", { class: "cb-link-url", text: sizeLabel(f.size) })]),
-        f.type === "application/pdf" ? h("a", { class: "cb-btn is-small", href: fileUrl(slug, f), target: "_blank", rel: "noopener", text: t("View") }) : null,
-        h("a", { class: "cb-btn is-small is-primary", href: fileUrl(slug, f, true), text: t("Download") }),
-      ]);
+      const viewable = f.type === "application/pdf";
+      file = h(
+        "div",
+        {
+          class: "cb-file",
+          draggable: "true",
+          role: "button",
+          tabindex: "0",
+          title: t("Click to open — or drag it out to save"),
+          ondragstart: dragOut,
+          // The whole card opens the file; its two buttons do their own thing.
+          onclick: (event: MouseEvent) => {
+            if ((event.target as HTMLElement).closest("a")) return;
+            if (viewable) window.open(absolute(false), "_blank", "noopener");
+            else location.assign(absolute(true));
+          },
+          onkeydown: (event: KeyboardEvent) => {
+            if (event.key === "Enter" && event.target === event.currentTarget) (event.currentTarget as HTMLElement).click();
+          },
+        },
+        [
+          h("span", { class: "cb-file-icon", text: fileIcon(f) }),
+          h("span", { class: "cb-link-meta" }, [h("span", { class: "cb-link-host", text: f.name }), h("span", { class: "cb-link-url", text: sizeLabel(f.size) })]),
+          viewable ? h("a", { class: "cb-btn is-small", href: fileUrl(slug, f), target: "_blank", rel: "noopener", text: t("View") }) : null,
+          h("a", { class: "cb-btn is-small is-primary", href: fileUrl(slug, f, true), text: t("Download") }),
+        ],
+      );
     }
   }
 
@@ -728,22 +788,16 @@ function composer(app: App): HTMLElement {
   };
   collapsed.addEventListener("click", open);
   fileInput.addEventListener("change", () => setFile(fileInput.files?.[0] ?? null));
-  for (const target of [collapsed, cardEl]) {
-    target.addEventListener("dragover", (event) => {
-      event.preventDefault();
-      cardEl.classList.add("is-dragover");
-    });
-    target.addEventListener("dragleave", () => cardEl.classList.remove("is-dragover"));
-    target.addEventListener("drop", (event) => {
-      event.preventDefault();
-      cardEl.classList.remove("is-dragover");
-      const dropped = (event as DragEvent).dataTransfer?.files?.[0];
-      if (dropped) {
-        open();
-        setFile(dropped);
-      }
-    });
-  }
+  // A file dropped anywhere on the board lands here (see showBoard).
+  attachDropped =
+    s.board.locked && !s.isOwner
+      ? null
+      : (dropped: File) => {
+          open();
+          setFile(dropped);
+          if (!titleInput.value.trim()) titleInput.value = dropped.name.replace(/\.[^.]+$/, "");
+          wrap.scrollIntoView({ block: "start", behavior: "smooth" });
+        };
 
   submit.addEventListener("click", async () => {
     const title = titleInput.value.trim();
