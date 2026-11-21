@@ -212,6 +212,9 @@ const TOOL_CURSORS: Partial<Record<ToolType, string>> = {
   image: "crosshair",
 };
 
+/** Pointer gestures whose every step is shared with a live room. */
+const LIVE_POINTER_MODES = new Set(["draw", "freedraw", "move", "resize", "rotate", "linearPoint"]);
+
 export class App implements CloudHost {
   readonly container: HTMLElement;
   readonly staticCanvas: HTMLCanvasElement;
@@ -1125,6 +1128,14 @@ export class App implements CloudHost {
     this.altKey = event.altKey;
     const scene = this.clientToScene(event.clientX, event.clientY);
     this.lastPointerScene = scene;
+
+    // In a live room, a stroke or a drag goes out while it happens — it used
+    // to wait for the button to come up, so others saw nothing for the whole
+    // gesture and then everything at once. Queued after this handler has
+    // applied the move; the session sends only what changed.
+    if (this.collab && LIVE_POINTER_MODES.has(this.pointerMode.type)) {
+      queueMicrotask(() => this.collab?.queueBroadcast());
+    }
 
     switch (this.pointerMode.type) {
       case "pan": {
