@@ -21,6 +21,7 @@ import {
   type CloudScene,
 } from "./cloud";
 import { mergeElements, sceneSignature } from "./merge";
+import { CLASS_BOARDS_CHANGED, classBoardRecords, mergeClassBoardRecords } from "./classBoard";
 import { ROOMS_CHANGED, allRoomRecords, mergeRoomRecords, type RoomMeta } from "./recentRooms";
 import {
   addBoard,
@@ -97,6 +98,7 @@ export class CloudSync {
 
   constructor(private readonly host: CloudHost) {
     window.addEventListener(ROOMS_CHANGED, () => this.roomsChanged());
+    window.addEventListener(CLASS_BOARDS_CHANGED, () => this.roomsChanged());
     // Back online after a failure: try at once rather than wait for the timer.
     window.addEventListener("online", () => {
       if (this.failed.size) void this.retry();
@@ -251,6 +253,13 @@ export class CloudSync {
     }
   }
 
+  /** Saves the room list (and class-board keys) now — before logging out. */
+  async flushRooms(): Promise<void> {
+    if (this.roomsTimer !== null) window.clearTimeout(this.roomsTimer);
+    this.roomsTimer = null;
+    await this.syncRooms(0, true);
+  }
+
   /** The room list changed here; save it to the account shortly. */
   roomsChanged(): void {
     if (!this.account) return;
@@ -270,36 +279,41 @@ export class CloudSync {
     const account = this.account;
     if (!account) return;
     try {
+      // The same record carries the class boards this account made or
+      // opened, with their owner keys: the owner on one device is the owner
+      // on all of them. The record is encrypted like every canvas.
+      type RoomsRecord = CloudScene & { rooms?: RoomMeta[]; classBoards?: unknown };
+      const absorb = (pulled: { scene: CloudScene; updated: number }): void => {
+        const scene = pulled.scene as RoomsRecord;
+        const rooms = mergeRoomRecords(scene.rooms ?? []);
+        const boards = mergeClassBoardRecords(scene.classBoards);
+        if (rooms || boards) this.host.onCloudChanged();
+        this.setRoomsSynced(pulled.updated);
+      };
       if (remoteVersion > this.roomsSynced() || local) {
         const pulled = await pullCloudCanvas(account, ROOMS_RECORD);
-        if (pulled) {
-          const rooms = (pulled.scene as CloudScene & { rooms?: RoomMeta[] }).rooms ?? [];
-          if (mergeRoomRecords(rooms)) this.host.onCloudChanged();
-          this.setRoomsSynced(pulled.updated);
-        }
+        if (pulled) absorb(pulled);
       }
-      const records = allRoomRecords();
-      const signature = JSON.stringify(records);
-      if (!records.length || signature === this.roomsSignature) return;
+      const snapshot = () => ({ rooms: allRoomRecords(), classBoards: classBoardRecords() });
+      const signature = JSON.stringify(snapshot());
+      const current = snapshot();
+      if ((!current.rooms.length && !current.classBoards.length) || signature === this.roomsSignature) return;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const updated = await pushCloudCanvas(
             account,
             ROOMS_RECORD,
             "rooms",
-            { elements: [], files: {}, rooms: allRoomRecords() } as CloudScene,
+            { elements: [], files: {}, ...snapshot() } as CloudScene,
             this.roomsSynced(),
           );
           this.setRoomsSynced(updated);
-          this.roomsSignature = JSON.stringify(allRoomRecords());
+          this.roomsSignature = JSON.stringify(snapshot());
           return;
         } catch (error) {
           if (!(error instanceof CloudConflict)) throw error;
           const pulled = await pullCloudCanvas(account, ROOMS_RECORD);
-          if (pulled) {
-            mergeRoomRecords((pulled.scene as CloudScene & { rooms?: RoomMeta[] }).rooms ?? []);
-            this.setRoomsSynced(pulled.updated);
-          }
+          if (pulled) absorb(pulled);
         }
       }
     } catch {

@@ -1164,6 +1164,41 @@ try {
     await studentB.context.close();
   }
 
+  // The board's owner is the account, not one browser: a board made on the
+  // laptop is managed from the tablet too, and logging out leaves no keys.
+  if (!LIVE) {
+    const ownerLaptop = await profile("board-owner-laptop");
+    const ol = await ownerLaptop.open();
+    await ol.evaluate(() => document.querySelector(".welcome")?.remove());
+    await signup(ol, "boardowner@example.com");
+    await ol.waitForFunction(() => document.querySelector(".cloud-chip")?.dataset.state === "saved", null, { timeout: 20000 });
+    await ol.keyboard.press("Escape");
+    await ol.click(".board-btn");
+    await ol.waitForSelector(".class-board .cb-title");
+    const ownedSlug = await ol.evaluate(() => window.axdraw.classBoardSlug());
+    await ol.evaluate(() => window.axdraw.cloud.flushRooms());
+
+    const ownerTablet = await profile("board-owner-tablet");
+    const ot = await ownerTablet.open();
+    await login(ot, "boardowner@example.com");
+    await ot.waitForFunction(() => document.querySelector(".cloud-chip")?.dataset.state === "saved", null, { timeout: 20000 });
+    await ot.waitForFunction(
+      (slug) => (JSON.parse(localStorage.getItem("axdraw:class-boards") || "[]").find((b) => b.slug === slug) ?? {}).ownerKey,
+      ownedSlug,
+      { timeout: 15000 },
+    );
+    await ot.evaluate((slug) => { location.hash = `#board=${slug}`; }, ownedSlug);
+    await ot.waitForSelector(".class-board .cb-title", { timeout: 15000 });
+    const tabletOwner = await ot.evaluate(() => Boolean(document.querySelector(".cb-pill.is-add")));
+    check("a board made on one device is managed from the account's other devices", tabletOwner);
+
+    await ot.evaluate(() => window.axdraw.logout());
+    const leftKeys = await ot.evaluate(() => localStorage.getItem("axdraw:class-boards"));
+    check("logging out removes the board owner keys from that computer", leftKeys === null, String(leftKeys));
+    await ownerLaptop.context.close();
+    await ownerTablet.context.close();
+  }
+
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (error) {
   if (error !== "done") {
