@@ -47,7 +47,7 @@ compatibility_date = "2026-08-01"
 [assets]
 directory = "${join(ROOT, "dist")}"
 binding = "ASSETS"
-run_worker_first = ["/api/*"]
+run_worker_first = ["/api/*", "/j/*"]
 [[kv_namespaces]]
 binding = "SCENES"
 id = "test"
@@ -1162,6 +1162,57 @@ try {
     check("'← Canvas' goes back to the paired canvas", !(await tb.locator(".class-board").count()) && (await tb.evaluate(() => window.axdraw.classBoardSlug())) === slug);
     await teacherB.context.close();
     await studentB.context.close();
+  }
+
+  // Six-digit join codes: a board by its short link, a live room by typing
+  // the code in, with a QR alongside and lookups rate-limited.
+  if (!LIVE) {
+    const host = await (await profile("code-teacher")).open();
+    await host.evaluate(() => document.querySelector(".welcome")?.remove());
+    await host.click(".board-btn");
+    await host.waitForSelector(".class-board .cb-title");
+    await host.click(".cb-code");
+    await host.waitForSelector(".join-code");
+    const boardCode = (await host.getAttribute(".join-code", "aria-label")) ?? "";
+    const qrModules = await host.evaluate(() => (document.querySelector(".join-qr svg path")?.getAttribute("d") ?? "").split("M").length - 1);
+    const boardSlug = await host.evaluate(() => window.axdraw.classBoardSlug());
+    check("a board gets a six-digit code with a QR", /^\d{6}$/.test(boardCode) && qrModules > 100, `${boardCode}, ${qrModules} modules`);
+    const kid = await (await profile("code-student")).open(`${BASE}/j/${boardCode}`);
+    await kid.waitForSelector(".class-board .cb-title", { timeout: 15000 });
+    check(
+      "the short link /j/<code> opens the board",
+      (await kid.evaluate(() => window.axdraw.classBoardSlug())) === boardSlug,
+      await kid.evaluate(() => location.href),
+    );
+    await host.keyboard.press("Escape");
+    await host.click(".cb-btn >> text=/← 캔버스|← Canvas/");
+
+    // A live room by code: the teacher shows it, the student types it in.
+    if (!process.env.SKIP_ROOMS) {
+      await host.click(".share-btn");
+      await host.click(".share-code >> nth=0");
+      await host.waitForSelector(".join-code", { timeout: 15000 });
+      const roomCode = (await host.getAttribute(".join-code", "aria-label")) ?? "";
+      const roomId = await host.evaluate(() => window.axdraw.collab?.id);
+      const pupil = await (await profile("code-pupil")).open();
+      await pupil.evaluate(() => document.querySelector(".welcome")?.remove());
+      await pupil.click('button[title="Menu"]');
+      await pupil.click("text=/코드로 입장…|Join with a code…/");
+      await pupil.fill(".join-input", `${roomCode.slice(0, 3)} ${roomCode.slice(3)}`);
+      await pupil.click(".join-go");
+      await pupil.waitForFunction((id) => window.axdraw.collab?.id === id, roomId, { timeout: 15000 }).catch(() => undefined);
+      check("typing a room's code joins that live room", (await pupil.evaluate(() => window.axdraw.collab?.id)) === roomId, String(roomId));
+      await pupil.context().close();
+    }
+
+    const tries = await kid.evaluate(async () => {
+      const statuses = [];
+      for (let i = 0; i < 24; i++) statuses.push((await fetch("/api/codes/000000")).status);
+      return statuses;
+    });
+    check("an unknown code is refused, and guessing is rate-limited", tries[0] === 404 && tries.at(-1) === 429, tries.join(","));
+    await host.context().close();
+    await kid.context().close();
   }
 
   // The board's owner is the account, not one browser: a board made on the

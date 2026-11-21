@@ -5,6 +5,7 @@ import { watchForUpdates } from "./update";
 import { initSceneStore, readScene, sceneKeys } from "./scene/sceneStore";
 import { recoverOrphanedBoards } from "./scene/storage";
 import { isBoardOpen, openBoardBySlug } from "./ui/classBoard";
+import { joinWithCode } from "./ui/joinCode";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("#root is missing from the page");
@@ -26,7 +27,9 @@ function start(): void {
   // With neither, a canvas that belongs to a live room reconnects to it — the
   // owner's tab comes back to the room the next day instead of a private copy.
   const boardHash = /^#board=([A-Z0-9]{4,16})$/.exec(location.hash);
-  if (boardHash) void openBoardBySlug(app, boardHash[1]);
+  const joinHash = /^#join=(\d{6})$/.exec(location.hash);
+  if (joinHash) void joinWithCode(app, joinHash[1]);
+  else if (boardHash) void openBoardBySlug(app, boardHash[1]);
   else if (location.hash.startsWith("#share=")) void app.loadFromShareLink();
   else if (location.hash.startsWith("#room=")) void app.joinCollabFromHash();
   else if (!location.hash.startsWith("#cloud=")) void app.resumeRoom();
@@ -43,6 +46,11 @@ function start(): void {
   // this the paste appears to do nothing at all and the user sits in their own
   // canvas wondering why they cannot see anyone.
   window.addEventListener("hashchange", () => {
+    const join = /^#join=(\d{6})$/.exec(location.hash);
+    if (join) {
+      void joinWithCode(app, join[1]);
+      return;
+    }
     const board = /^#board=([A-Z0-9]{4,16})$/.exec(location.hash);
     if (board) {
       if (!isBoardOpen()) void openBoardBySlug(app, board[1]);

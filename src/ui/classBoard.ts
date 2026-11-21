@@ -15,7 +15,6 @@ import {
   BOARD_COLORS,
   askBoardAi,
   authorName,
-  boardLink,
   commentOnBoardPost,
   createBoardPost,
   createClassBoard,
@@ -36,6 +35,8 @@ import {
 } from "../scene/classBoard";
 import { h } from "./dom";
 import { openConfirmDialog } from "./dialogs";
+import { createJoinCode } from "../scene/joinCode";
+import { openJoinCodeDialog } from "./joinCode";
 
 const REFRESH_MS = 10000;
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
@@ -213,15 +214,20 @@ function render(app: App): void {
       h("button", { class: "cb-btn", type: "button", text: t("✨ AI summary"), onclick: () => void runAi(s.board.slug, "summary") }),
       h("button", { class: "cb-btn", type: "button", text: t("📝 AI quiz"), onclick: () => void runAi(s.board.slug, "quiz") }),
       h("button", {
-        class: "cb-btn",
+        class: "cb-btn is-primary cb-code",
         type: "button",
-        text: t("🔗 Copy link"),
+        text: t("🔑 Join code · QR"),
         onclick: async () => {
           try {
-            await navigator.clipboard.writeText(boardLink(s.board.slug));
-            message(t("Board link copied — students open it to post"));
-          } catch {
-            prompt(t("Board link"), boardLink(s.board.slug));
+            const code = await createJoinCode({ kind: "board", slug: s.board.slug });
+            openJoinCodeDialog({
+              title: t("Join code for this board"),
+              code,
+              note: t("Anyone with the code, the QR or the link can read and post. Lock the board to stop new posts."),
+              onMessage: (text) => message(text),
+            });
+          } catch (error) {
+            failure(error);
           }
         },
       }),

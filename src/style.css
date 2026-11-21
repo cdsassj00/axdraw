@@ -1901,3 +1901,34 @@ input[type="range"] {
 @media (max-width: 420px) {
   .board-btn { display: none; }
 }
+
+/* Join code: big digits for a projector, a QR for phones, a short link. */
+.join-modal { max-width: min(440px, calc(100vw - 32px)); text-align: center; }
+.join-code {
+  margin: 6px 0 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: clamp(44px, 12vw, 64px);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
+.join-qr { display: flex; justify-content: center; margin-bottom: 12px; }
+.join-qr svg { width: min(220px, 60vw); height: auto; border-radius: 8px; }
+.join-link-row { display: flex; gap: 6px; margin-bottom: 10px; }
+.join-link-row .share-url { flex: 1; min-width: 0; }
+.join-how { margin: 0 0 6px; color: var(--text-muted); font-size: 12.5px; line-height: 1.5; }
+.join-note { margin: 0; color: var(--text-muted); font-size: 11.5px; line-height: 1.5; }
+.join-input {
+  width: 100%;
+  margin: 8px 0 12px;
+  padding: 12px;
+  border: 1px solid var(--island-border);
+  border-radius: 12px;
+  background: var(--island-bg);
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 32px;
+  text-align: center;
+  letter-spacing: 0.12em;
+}
+.join-go { width: 100%; }

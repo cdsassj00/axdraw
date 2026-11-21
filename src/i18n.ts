@@ -190,6 +190,22 @@ const ko: Dict = {
   "a post needs a title, text, a link or a file": "제목·내용·링크·파일 중 하나는 넣어 주세요",
   "Board": "게시판",
   "Class board…": "강의 게시판…",
+  "Join code for this canvas": "이 캔버스 접속코드",
+  "Join code for this board": "이 게시판 접속코드",
+  "With a code the server keeps this room's key, so the room is no longer end-to-end encrypted. For a private meeting, share the long live link instead.": "접속코드를 쓰면 서버가 이 방의 열쇠를 보관하므로 종단간 암호화가 아닙니다. 비밀 회의라면 긴 협업 링크를 대신 보내세요.",
+  "Anyone with the code, the QR or the link can read and post. Lock the board to stop new posts.": "코드·QR·링크를 가진 사람은 누구나 보고 글을 올릴 수 있습니다. 새 글을 막으려면 게시판을 잠그세요.",
+  "🔑 Join code · QR": "🔑 접속코드 · QR",
+  "Students: scan the QR, open the link, or go to axdraw.org → menu → Join with a code.": "수강생: QR을 찍거나, 링크를 열거나, axdraw.org → 메뉴 → 코드로 입장에서 숫자를 입력하세요.",
+  "Join with a code…": "코드로 입장…",
+  "Join with a code": "코드로 입장",
+  "Join code": "접속코드",
+  "Join": "입장",
+  "Type the six digits your teacher shows.": "선생님이 보여 주는 6자리 숫자를 입력하세요.",
+  "A join code has six digits": "접속코드는 숫자 6자리입니다",
+  "That code does not exist or has expired": "없는 코드이거나 기간이 지난 코드입니다",
+  "too many tries — wait a minute": "너무 많이 시도했습니다 — 1분 뒤에 다시 해 주세요",
+  "Link copied": "링크를 복사했습니다",
+  "Link": "링크",
 };
 
 const ja: Dict = {
