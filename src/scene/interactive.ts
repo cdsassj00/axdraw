@@ -79,10 +79,11 @@ export function renderInteractiveScene(canvas: HTMLCanvasElement, state: Interac
     }
   }
 
-  // Per-element outlines.
+  // Per-element outlines (skip ugly rectangular box for a single selected arrow/line).
   if (state.selectedIds.size > 0) {
     for (const element of state.elements) {
       if (!state.selectedIds.has(element.id) || element.isDeleted) continue;
+      if (state.selectedIds.size === 1 && (element.type === "arrow" || element.type === "line")) continue;
       drawElementOutline(ctx, element, px, ACCENT_SOFT, 1);
     }
   }

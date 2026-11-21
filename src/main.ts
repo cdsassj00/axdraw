@@ -1,6 +1,7 @@
 import "./style.css";
 import { App } from "./app";
 import { createUI } from "./ui";
+import { mountAxPad } from "./padlet";
 import { watchForUpdates } from "./update";
 import { initSceneStore, readScene, sceneKeys } from "./scene/sceneStore";
 import { recoverOrphanedBoards } from "./scene/storage";
@@ -18,6 +19,7 @@ function start(): void {
   const recovered = recoverOrphanedBoards();
   const app = new App(root);
   createUI(app);
+  mountAxPad(app);
   if (recovered) app.onMessage?.(`목록에서 빠져 있던 캔버스 ${recovered}개를 찾아 '복구된 캔버스'로 되살렸습니다`);
 
   // Opened through a share link? Fetch and decrypt it into a canvas of its own.

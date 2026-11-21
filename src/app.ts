@@ -527,7 +527,10 @@ export class App implements CloudHost {
     let selectionBounds = null;
     let selectionAngle = 0;
 
-    if (selected.length > 0 && !this.state.viewMode) {
+    const singleSelectedLinear =
+      selected.length === 1 && isLinear(selected[0]) && !this.state.viewMode ? selected[0] : undefined;
+
+    if (selected.length > 0 && !this.state.viewMode && !singleSelectedLinear) {
       if (selected.length === 1) {
         const element = selected[0];
         selectionAngle = element.angle;
@@ -550,7 +553,7 @@ export class App implements CloudHost {
 
     const editingLinear = this.editingLinearId
       ? (this.elements.find((element) => element.id === this.editingLinearId) as LinearElement | undefined)
-      : undefined;
+      : singleSelectedLinear;
 
     renderInteractiveScene(this.interactiveCanvas, {
       elements: this.elements,
@@ -802,34 +805,38 @@ export class App implements CloudHost {
     const threshold = HIT_THRESHOLD / this.state.zoom;
     const selected = this.getSelectedElements();
 
-    // 1. Line editor points.
-    if (this.editingLinearId) {
-      const element = this.elements.find((item) => item.id === this.editingLinearId);
-      if (element && isLinear(element)) {
-        const pointIndex = getLinearPointIndexAt(element, scene, threshold);
-        if (pointIndex !== -1) {
-          this.pointerMode = { type: "linearPoint", element, index: pointIndex };
-          return;
-        }
-        const midIndex = getLinearMidpointIndexAt(element, scene, threshold);
-        if (midIndex !== -1) {
-          const local = this.toElementLocal(element, scene);
-          const points = element.points.map((point) => [...point] as [number, number]);
-          points.splice(midIndex + 1, 0, [local.x, local.y]);
-          mutateElement(element, { points });
-          normalizePoints(element);
-          this.pointerMode = { type: "linearPoint", element, index: midIndex + 1 };
-          this.scheduleRender();
-          return;
-        }
-        if (!hitTest(element, scene, threshold)) {
-          this.editingLinearId = null;
-        }
+    // 1. Line editor points (works immediately on any single selected arrow/line).
+    const activeLinear = this.editingLinearId
+      ? this.elements.find((item) => item.id === this.editingLinearId)
+      : selected.length === 1 && isLinear(selected[0]) && !selected[0].locked
+        ? selected[0]
+        : undefined;
+    if (activeLinear && isLinear(activeLinear)) {
+      const element = activeLinear;
+      const pointIndex = getLinearPointIndexAt(element, scene, threshold);
+      if (pointIndex !== -1) {
+        this.pointerMode = { type: "linearPoint", element, index: pointIndex };
+        return;
+      }
+      const midIndex = getLinearMidpointIndexAt(element, scene, threshold);
+      if (midIndex !== -1) {
+        const local = this.toElementLocal(element, scene);
+        const points = element.points.map((point) => [...point] as [number, number]);
+        points.splice(midIndex + 1, 0, [local.x, local.y]);
+        mutateElement(element, { points });
+        normalizePoints(element);
+        this.pointerMode = { type: "linearPoint", element, index: midIndex + 1 };
+        this.scheduleRender();
+        return;
+      }
+      if (this.editingLinearId && !hitTest(element, scene, threshold)) {
+        this.editingLinearId = null;
       }
     }
 
-    // 2. Transform handles.
-    if (selected.length && !selected.some((element) => element.locked)) {
+    // 2. Transform handles (skip box handles when single arrow/line is selected).
+    const isSingleLinearSelected = selected.length === 1 && isLinear(selected[0]);
+    if (selected.length && !isSingleLinearSelected && !selected.some((element) => element.locked)) {
       const bounds =
         selected.length === 1
           ? {
