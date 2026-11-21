@@ -163,7 +163,7 @@ const ko: Dict = {
   "✨ AI summary": "✨ AI 요약",
   "＋ Category": "＋ 카테고리",
   "＋ New category column": "＋ 새 카테고리 칸",
-  "＋ Write a post-it — text, a link to your site, or a file (drop it here)": "＋ 포스트잇 쓰기 — 글, 내가 만든 사이트 링크, 파일(여기로 끌어다 놓기)",
+  "＋ Write a post-it — text, a link to your site, or a file (drop it here)": "＋ 포스트잇 쓰기 — 글, 내가 만든 사이트 링크, 파일(게시판 아무 곳에나 끌어다 놓기)",
   "📂 My boards": "📂 내 게시판",
   "📋 Board": "📋 게시판",
   "📎 File": "📎 파일",
@@ -234,6 +234,7 @@ const ko: Dict = {
   "Wrong instructor password": "강사 비밀번호가 틀렸습니다",
   "the password needs at least 4 characters": "비밀번호는 4자 이상이어야 합니다",
   "this board already has an instructor password": "이 게시판에는 이미 강사 비밀번호가 있습니다",
+  "Click to open — or drag it out to save": "누르면 열립니다 — 바탕화면·폴더로 끌어다 놓으면 저장됩니다",
 };
 
 const ja: Dict = {

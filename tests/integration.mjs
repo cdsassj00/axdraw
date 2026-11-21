@@ -1066,6 +1066,48 @@ try {
         (await tb.locator(".cb-card .cb-link").first().getAttribute("href")) === "https://axdraw.org/",
     );
 
+    // A file dropped anywhere on the board starts a post-it with it attached,
+    // and a posted file opens on a click or drags out to be saved.
+    await tb.evaluate(() => {
+      const data = new DataTransfer();
+      data.items.add(new File(["drop body"], "끌어온 자료.txt", { type: "text/plain" }));
+      const target = document.querySelector(".cb-body");
+      for (const type of ["dragenter", "dragover", "drop"]) {
+        target.dispatchEvent(new DragEvent(type, { dataTransfer: data, bubbles: true, cancelable: true }));
+      }
+    });
+    const droppedInto = await tb.evaluate(() => ({
+      open: !document.querySelector(".cb-composer").hidden,
+      file: document.querySelector(".cb-file-name").textContent,
+      title: document.querySelector(".cb-composer .cb-input.is-title").value,
+    }));
+    check(
+      "dropping a file anywhere on the board attaches it to a new post-it",
+      droppedInto.open && droppedInto.file.includes("끌어온 자료.txt") && droppedInto.title === "끌어온 자료",
+      JSON.stringify(droppedInto),
+    );
+    const cardsBefore = await tb.locator(".cb-card").count();
+    await tb.click(".cb-composer .cb-btn.is-primary");
+    await tb.waitForFunction((n) => document.querySelectorAll(".cb-card").length > n, cardsBefore, { timeout: 15000 });
+    const dragged = await tb.evaluate(() => {
+      const card = document.querySelector(".cb-file");
+      const data = new DataTransfer();
+      card.dispatchEvent(new DragEvent("dragstart", { dataTransfer: data, bubbles: true }));
+      return { draggable: card.getAttribute("draggable"), download: data.getData("DownloadURL") };
+    });
+    check(
+      "a posted file can be dragged out to save, under its own name",
+      dragged.draggable === "true" && /^text\/plain:끌어온 자료\.txt:http.+\?download=1$/.test(dragged.download),
+      JSON.stringify(dragged),
+    );
+    const [opened] = await Promise.all([
+      // (The name itself is checked through the response header further down;
+      // the test browser does not decode filename*= for suggestedFilename.)
+      tb.waitForEvent("download", { timeout: 10000 }).then((d) => d.url(), () => null),
+      tb.click(".cb-file .cb-link-host"),
+    ]);
+    check("clicking a posted file opens it", /\/files\/[A-Za-z0-9_-]+\?download=1$/.test(opened ?? ""), String(opened));
+
     // A student opens the link on another device.
     const studentB = await profile("board-student");
     const sb = await studentB.open(`${BASE}/#board=${slug}`);
