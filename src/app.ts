@@ -126,6 +126,7 @@ import {
   type SnapLine,
 } from "./scene/interactive";
 import { onSceneFromOtherTab, onStorageFailure } from "./scene/sceneStore";
+import { clearClassBoardRecords } from "./scene/classBoard";
 import { renderActiveLayer, renderStaticScene, screenToScene, type Viewport } from "./scene/renderer";
 import {
   appendToBoard,
@@ -3549,6 +3550,9 @@ export class App implements CloudHost {
   async logout(): Promise<void> {
     this.cloud.flush();
     await this.cloud.idle();
+    // The room list and board owner keys are cleared below; make sure the
+    // account has them first.
+    await this.cloud.flushRooms();
     if (this.collab) this.disconnectRoom();
     const mine = listBoards().filter((board) => board.cloudSynced || board.remote);
     const wasOpen = currentBoardId();
@@ -3556,6 +3560,9 @@ export class App implements CloudHost {
     // The room list is the account's too, and each entry is a key to a room:
     // the next person at this computer must not inherit it.
     clearRoomRecords();
+    // A teacher's board owner keys must not stay on a shared computer; the
+    // account has them and brings them back on the next login.
+    clearClassBoardRecords();
     try {
       localStorage.removeItem("axdraw:rooms-synced");
     } catch {

@@ -50,7 +50,7 @@ export interface BoardPost {
   comments: BoardComment[];
 }
 
-interface KnownBoard {
+export interface KnownBoard {
   slug: string;
   title: string;
   ownerKey?: string;
@@ -86,17 +86,64 @@ export function knownBoards(): KnownBoard[] {
   return read<KnownBoard[]>(KNOWN_KEY, []).sort((a, b) => b.visited - a.visited);
 }
 
+/**
+ * Fired when this browser learns a board's owner key or a new board: the
+ * list goes up to the account (inside the encrypted room-list record), so
+ * the teacher is the board's owner on every device they log in on — and
+ * gets that back after clearing the browser.
+ */
+export const CLASS_BOARDS_CHANGED = "axdraw:class-boards-changed";
+
 export function rememberBoard(board: Pick<ClassBoard, "slug" | "title">, ownerKey?: string): void {
   const boards = read<KnownBoard[]>(KNOWN_KEY, []);
   const existing = boards.find((entry) => entry.slug === board.slug);
+  let news = false;
   if (existing) {
+    news = existing.title !== board.title || Boolean(ownerKey && existing.ownerKey !== ownerKey);
     existing.title = board.title;
     existing.visited = Date.now();
     if (ownerKey) existing.ownerKey = ownerKey;
   } else {
     boards.push({ slug: board.slug, title: board.title, ownerKey, visited: Date.now() });
+    news = true;
   }
   write(KNOWN_KEY, boards);
+  if (news) window.dispatchEvent(new Event(CLASS_BOARDS_CHANGED));
+}
+
+/** Every board this browser knows, as saved to the account. */
+export function classBoardRecords(): KnownBoard[] {
+  return read<KnownBoard[]>(KNOWN_KEY, []).map(({ slug, title, ownerKey, visited }) => ({ slug, title, ownerKey, visited }));
+}
+
+/** Folds in the account's list; returns whether anything new arrived. */
+export function mergeClassBoardRecords(incoming: unknown): boolean {
+  if (!Array.isArray(incoming)) return false;
+  const boards = read<KnownBoard[]>(KNOWN_KEY, []);
+  let changed = false;
+  for (const raw of incoming as Partial<KnownBoard>[]) {
+    if (!raw || typeof raw.slug !== "string" || !BOARD_SLUG_PATTERN.test(raw.slug)) continue;
+    const existing = boards.find((entry) => entry.slug === raw.slug);
+    if (!existing) {
+      boards.push({ slug: raw.slug, title: String(raw.title ?? raw.slug), ownerKey: raw.ownerKey, visited: Number(raw.visited) || 0 });
+      changed = true;
+    } else if (raw.ownerKey && !existing.ownerKey) {
+      existing.ownerKey = raw.ownerKey;
+      changed = true;
+    }
+  }
+  if (changed) write(KNOWN_KEY, boards);
+  return changed;
+}
+
+/** Logging out on a shared computer must not leave a teacher's owner keys behind. */
+export function clearClassBoardRecords(): void {
+  try {
+    localStorage.removeItem(KNOWN_KEY);
+    localStorage.removeItem(POST_KEYS);
+  } catch {
+    // Nothing to clear.
+  }
 }
 
 export function ownerKeyOf(slug: string): string | undefined {
